@@ -46,12 +46,11 @@ El flujo previsto es:
 Actualmente esta funcionalidad se encuentra simulada dentro del prototipo. La integración definitiva se realizará desde el backend para evitar exponer credenciales en el cliente.
 
 ## Tecnologías
-
-* React
-* TypeScript / JavaScript
+* Android Studio
+* Kotlin
 * Firebase Authentication
 * Firebase / Firestore
-* Servicios de inteligencia artificial
+* Gemini API 
 * Git y GitHub
 
 ## Estado del proyecto
