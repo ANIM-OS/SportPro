@@ -1,0 +1,16 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['email', 'roles', 'profileComplete'])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.profileComplete == true
+        && request.resource.data.roles is list
+        && request.resource.data.roles.size() > 0
+        && request.resource.data.roles.hasOnly(['JUGADOR', 'ENTRENADOR', 'PADRE / TUTOR']);
+    }
+  }
+}
