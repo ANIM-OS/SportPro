@@ -30,6 +30,8 @@ import androidx.compose.foundation.layout.padding
 import dev.dreamteam.sportpro.ui.community.CommunityScreen
 import dev.dreamteam.sportpro.ui.community.CreatePostScreen
 import androidx.compose.material.icons.filled.Add
+import dev.dreamteam.sportpro.ui.live.LiveMatchScreen
+import dev.dreamteam.sportpro.ui.statistics.StatisticsScreen
 
 sealed class SportProRoute(
     val route: String,
@@ -151,17 +153,11 @@ fun SportProNavGraph(
             }
 
             composable(SportProRoute.Live.route) {
-                PlaceholderScreen(
-                    title = "EN VIVO",
-                    subtitle = "US-15 · Marcador y cronología"
-                )
+                LiveMatchScreen()
             }
 
             composable(SportProRoute.Statistics.route) {
-                PlaceholderScreen(
-                    title = "ESTADÍSTICAS",
-                    subtitle = "US-16 · Rendimiento acumulado"
-                )
+                StatisticsScreen()
             }
 
             composable(SportProRoute.Community.route) {
