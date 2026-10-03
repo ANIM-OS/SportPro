@@ -34,6 +34,7 @@ import dev.dreamteam.sportpro.ui.auth.*
 import dev.dreamteam.sportpro.ui.theme.SportProTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import dev.dreamteam.sportpro.navigation.SportProNavGraph
 
 enum class Screen {
     LOGIN,
@@ -177,7 +178,7 @@ class MainActivity : ComponentActivity() {
                             isLoading = isLoading,
                             onCancelClick = signOut
                         )
-                        Screen.HOME -> HomeScreen(
+                        Screen.HOME -> SportProNavGraph(
                             userEmail = FirebaseAuth.getInstance().currentUser?.email ?: registeredEmail,
                             onLogout = signOut,
                             isLoading = isSigningOut
