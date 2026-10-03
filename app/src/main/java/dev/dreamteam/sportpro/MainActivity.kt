@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,7 +49,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            SportProTheme {
+            var isDarkTheme by remember { mutableStateOf(true) }
+
+            SportProTheme(darkTheme = isDarkTheme) {
                 val authViewModel: AuthViewModel = viewModel()
                 val authState by authViewModel.authState.collectAsState()
                 val currentUser = FirebaseAuth.getInstance().currentUser
@@ -109,7 +112,7 @@ class MainActivity : ComponentActivity() {
 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = Color(0xFF0D0F12)
+                    color = MaterialTheme.colorScheme.background
                 ) {
                     when (currentScreen) {
                         Screen.LOGIN -> LoginScreen(
@@ -158,7 +161,9 @@ class MainActivity : ComponentActivity() {
                             },
                             errorMessage = errorMessage,
                             isLoading = isLoading,
-                            isGoogleLoading = isGoogleLoading
+                            isGoogleLoading = isGoogleLoading,
+                            isDarkTheme = isDarkTheme,
+                            onToggleTheme = { isDarkTheme = !isDarkTheme }
                         )
                         Screen.REGISTER -> RegisterScreen(
                             onRegisterClick = { email, pass ->
@@ -169,19 +174,25 @@ class MainActivity : ComponentActivity() {
                                 currentScreen = Screen.LOGIN
                             },
                             errorMessage = errorMessage,
-                            isLoading = isLoading
+                            isLoading = isLoading,
+                            isDarkTheme = isDarkTheme,
+                            onToggleTheme = { isDarkTheme = !isDarkTheme }
                         )
                         Screen.ROLE_SELECTION -> RoleSelectionScreen(
                             userEmail = registeredEmail,
                             userName = registeredEmail.substringBefore("@").replace(".", " ").replaceFirstChar { it.uppercase() },
                             onEnterClick = { roles -> authViewModel.saveRoles(roles) },
                             isLoading = isLoading,
-                            onCancelClick = signOut
+                            onCancelClick = signOut,
+                            isDarkTheme = isDarkTheme,
+                            onToggleTheme = { isDarkTheme = !isDarkTheme }
                         )
                         Screen.HOME -> SportProNavGraph(
                             userEmail = FirebaseAuth.getInstance().currentUser?.email ?: registeredEmail,
                             onLogout = signOut,
-                            isLoading = isSigningOut
+                            isLoading = isSigningOut,
+                            isDarkTheme = isDarkTheme,
+                            onToggleTheme = { isDarkTheme = !isDarkTheme }
                         )
                     }
                 }
@@ -191,32 +202,32 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun HomeScreen(userEmail: String, onLogout: () -> Unit, isLoading: Boolean = false) {
+fun HomeScreen(userEmail: String, onLogout: () -> Unit, isLoading: Boolean = false, isDarkTheme: Boolean = true, onToggleTheme: () -> Unit = {}) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0D0F12))
+            .background(MaterialTheme.colorScheme.background)
             .padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = "Sport", color = Color(0xFFFF6600), fontSize = 38.sp, fontWeight = FontWeight.Bold)
+                Text(text = "Sport", color = MaterialTheme.colorScheme.primary, fontSize = 38.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.width(4.dp))
-                Text(text = "Pro", color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.Bold)
+                Text(text = "Pro", color = MaterialTheme.colorScheme.onBackground, fontSize = 38.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(modifier = Modifier.height(16.dp))
-            Text(text = "¡Bienvenido de nuevo!", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text(text = "¡Bienvenido de nuevo!", color = MaterialTheme.colorScheme.onBackground, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             Spacer(modifier = Modifier.height(8.dp))
-            Text(text = userEmail, color = Color.Gray, fontSize = 14.sp)
+            Text(text = userEmail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
             Spacer(modifier = Modifier.height(32.dp))
             Button(
                 onClick = onLogout,
                 enabled = !isLoading,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A2E35)),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text(text = "Cerrar sesión", color = Color.White, fontWeight = FontWeight.Bold)
+                Text(text = "Cerrar sesión", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
             }
         }
     }

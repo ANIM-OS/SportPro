@@ -1,5 +1,6 @@
 package dev.dreamteam.sportpro.ui.community
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,11 +49,11 @@ fun CommunityScreen(
     val uiState by viewModel.uiState.collectAsState()
 
     Scaffold(
-        containerColor = Color(0xFF0D0F12),
+        containerColor = MaterialTheme.colorScheme.background,
         floatingActionButton = {
             FloatingActionButton(
                 onClick = onCreatePostClick,
-                containerColor = Color(0xFFFF6600),
+                containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = Color.White,
                 shape = CircleShape
             ) {
@@ -67,7 +68,7 @@ fun CommunityScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF0D0F12))
+                .background(MaterialTheme.colorScheme.background)
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp)
         ) {
@@ -76,14 +77,14 @@ fun CommunityScreen(
 
             Text(
                 text = "COMUNIDAD",
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold
             )
 
             Text(
                 text = "Comparte y mantente conectado con SportPro",
-                color = Color(0xFF9A9CA2),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp
             )
 
@@ -97,7 +98,7 @@ fun CommunityScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         CircularProgressIndicator(
-                            color = Color(0xFFFF6600)
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
@@ -124,7 +125,7 @@ fun CommunityScreen(
                         ) {
                             Text(
                                 text = "Aún no hay publicaciones",
-                                color = Color.White,
+                                color = MaterialTheme.colorScheme.onBackground,
                                 fontWeight = FontWeight.SemiBold
                             )
 
@@ -132,7 +133,7 @@ fun CommunityScreen(
 
                             Text(
                                 text = "Sé el primero en compartir algo",
-                                color = Color(0xFF9A9CA2),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 13.sp
                             )
                         }
@@ -166,8 +167,9 @@ private fun CommunityPostCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF161920)
-        )
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
     ) {
 
         Column(
@@ -181,7 +183,7 @@ private fun CommunityPostCard(
                 Box(
                     modifier = Modifier
                         .clip(CircleShape)
-                        .background(Color(0xFFFF6600))
+                        .background(MaterialTheme.colorScheme.primary)
                         .padding(9.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -200,21 +202,21 @@ private fun CommunityPostCard(
 
                     Text(
                         text = post.authorName.ifBlank { "Usuario SportPro" },
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp
                     )
 
                     Text(
                         text = post.authorRole,
-                        color = Color(0xFFFF6600),
+                        color = MaterialTheme.colorScheme.primary,
                         fontSize = 11.sp
                     )
                 }
 
                 Text(
                     text = formatDate(post),
-                    color = Color(0xFF9A9CA2),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 11.sp
                 )
             }
@@ -223,7 +225,7 @@ private fun CommunityPostCard(
 
             Text(
                 text = post.content,
-                color = Color(0xFFE7E7EA),
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 14.sp,
                 lineHeight = 20.sp
             )
@@ -236,7 +238,7 @@ private fun CommunityPostCard(
                     "ACADEMIA" -> "Visible para la academia"
                     else -> "Visible para todos"
                 },
-                color = Color(0xFF9A9CA2),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp
             )
         }
@@ -248,11 +250,6 @@ private fun formatDate(
 ): String {
 
     val timestamp = post.createdAt ?: return "Ahora"
-
-    val formatter = SimpleDateFormat(
-        "dd/MM/yyyy HH:mm",
-        Locale.getDefault()
-    )
-
-    return formatter.format(timestamp.toDate())
+    val sdf = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
+    return sdf.format(timestamp.toDate())
 }

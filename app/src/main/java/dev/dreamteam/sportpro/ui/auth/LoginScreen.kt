@@ -19,6 +19,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.dreamteam.sportpro.R
 
+/**
+ * Composable screen for user authentication / login.
+ * Supports email/password login, Google Sign-In, password recovery, navigation to registration,
+ * light/dark mode toggling, and loading/error state handling.
+ */
 @Composable
 fun LoginScreen(
     onLoginClick: (String, String) -> Unit,
@@ -27,7 +32,9 @@ fun LoginScreen(
     onNavigateToRegister: () -> Unit,
     errorMessage: String? = null,
     isLoading: Boolean = false,
-    isGoogleLoading: Boolean = false
+    isGoogleLoading: Boolean = false,
+    isDarkTheme: Boolean = true,
+    onToggleTheme: () -> Unit = {}
 ) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -36,7 +43,7 @@ fun LoginScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0D0F12))
+            .background(MaterialTheme.colorScheme.background)
             .padding(24.dp)
     ) {
         Column(
@@ -47,35 +54,60 @@ fun LoginScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.Start
         ) {
-            // Logo / Title
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Sport",
-                    color = Color(0xFFFF6600),
-                    fontSize = 40.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "Pro",
-                    color = Color.White,
-                    fontSize = 40.sp,
-                    fontWeight = FontWeight.Bold
-                )
+            // Header with Logo & Theme Toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Sport",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 40.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Pro",
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontSize = 40.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Surface(
+                    onClick = onToggleTheme,
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isDarkTheme) "🌙 MODO OSCURO" else "☀️ MODO CLARO",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(36.dp))
 
             Text(
                 text = "BIENVENIDO",
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "Inicia sesión para continuar",
-                color = Color.Gray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 14.sp
             )
 
@@ -84,7 +116,7 @@ fun LoginScreen(
             // Email
             Text(
                 text = "CORREO ELECTRÓNICO",
-                color = Color.Gray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.sp
@@ -96,12 +128,12 @@ fun LoginScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color(0xFFFF6600),
-                    unfocusedBorderColor = Color(0xFF2A2E35),
-                    focusedContainerColor = Color(0xFF161920),
-                    unfocusedContainerColor = Color(0xFF161920),
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant,
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                 ),
                 singleLine = true
             )
@@ -111,7 +143,7 @@ fun LoginScreen(
             // Password
             Text(
                 text = "CONTRASEÑA",
-                color = Color.Gray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.sp
@@ -126,7 +158,7 @@ fun LoginScreen(
                 trailingIcon = {
                     Text(
                         text = if (passwordVisible) "OCULTAR" else "MOSTRAR",
-                        color = Color.Gray,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier
@@ -135,12 +167,12 @@ fun LoginScreen(
                     )
                 },
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color(0xFFFF6600),
-                    unfocusedBorderColor = Color(0xFF2A2E35),
-                    focusedContainerColor = Color(0xFF161920),
-                    unfocusedContainerColor = Color(0xFF161920),
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant,
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                 ),
                 singleLine = true
             )
@@ -150,7 +182,7 @@ fun LoginScreen(
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
                 Text(
                     text = "¿Olvidaste tu contraseña?",
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     modifier = Modifier.clickable(enabled = !isLoading) { onForgotPasswordClick(email) }
                 )
@@ -174,7 +206,7 @@ fun LoginScreen(
                     .fillMaxWidth()
                     .height(50.dp),
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600)),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 enabled = !isLoading
             ) {
                 if (isLoading && !isGoogleLoading) {
@@ -196,13 +228,13 @@ fun LoginScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                HorizontalDivider(modifier = Modifier.weight(1f), color = Color(0xFF2A2E35))
+                HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.surfaceVariant)
                 Text(
                     text = "  o continúa con  ",
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp
                 )
-                HorizontalDivider(modifier = Modifier.weight(1f), color = Color(0xFF2A2E35))
+                HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.surfaceVariant)
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -215,11 +247,11 @@ fun LoginScreen(
                     .fillMaxWidth()
                     .height(50.dp),
                 shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, Color(0xFF2A2E35)),
-                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color(0xFF161920))
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant),
+                colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 if (isGoogleLoading) {
-                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
                     Spacer(modifier = Modifier.width(12.dp))
                 } else {
                     Image(
@@ -231,7 +263,7 @@ fun LoginScreen(
                 }
                 Text(
                     text = if (isGoogleLoading) "Conectando con Google…" else "Continuar con Google",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Medium,
                     fontSize = 14.sp
                 )
@@ -246,12 +278,12 @@ fun LoginScreen(
             ) {
                 Text(
                     text = "¿No tienes cuenta? ",
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp
                 )
                 Text(
                     text = "Regístrate",
-                    color = Color(0xFFFF6600),
+                    color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
                     modifier = Modifier.clickable(enabled = !isLoading) { onNavigateToRegister() }

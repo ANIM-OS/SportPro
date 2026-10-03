@@ -1,35 +1,53 @@
 package dev.dreamteam.sportpro.navigation
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.SportsSoccer
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.compose.foundation.layout.padding
 import dev.dreamteam.sportpro.ui.community.CommunityScreen
 import dev.dreamteam.sportpro.ui.community.CreatePostScreen
-import androidx.compose.material.icons.filled.Add
 
 sealed class SportProRoute(
     val route: String,
@@ -59,14 +77,16 @@ sealed class SportProRoute(
         route = "create_post",
         title = "Nueva publicación"
     )
-
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SportProNavGraph(
     userEmail: String,
     onLogout: () -> Unit,
-    isLoading: Boolean = false
+    isLoading: Boolean = false,
+    isDarkTheme: Boolean = true,
+    onToggleTheme: () -> Unit = {}
 ) {
     val navController = rememberNavController()
 
@@ -81,13 +101,75 @@ fun SportProNavGraph(
     val currentRoute = currentBackStackEntry?.destination?.route
 
     Scaffold(
-        containerColor = Color(0xFF0D0F12),
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Sport",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(
+                            text = "Pro",
+                            color = MaterialTheme.colorScheme.onBackground,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp
+                        )
+                    }
+                },
+                actions = {
+                    // Theme toggle pill button
+                    Surface(
+                        onClick = onToggleTheme,
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant),
+                        modifier = Modifier.padding(end = 4.dp)
+                    ) {
+                        Text(
+                            text = if (isDarkTheme) "🌙 MODO OSCURO" else "☀️ MODO CLARO",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Logout button
+                    TextButton(
+                        onClick = onLogout,
+                        enabled = !isLoading,
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Text(
+                                text = "Cerrar sesión",
+                                color = Color(0xFFFF5252),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+        },
         bottomBar = {
             NavigationBar(
-                containerColor = Color(0xFF161920)
+                containerColor = MaterialTheme.colorScheme.surface
             ) {
                 menuItems.forEach { item ->
-
                     val selected = currentRoute == item.route
 
                     NavigationBarItem(
@@ -95,11 +177,10 @@ fun SportProNavGraph(
                         onClick = {
                             navController.navigate(item.route) {
                                 popUpTo(
-                                    navController.graph.findStartDestination().id
+                                    navController.graph.startDestinationId
                                 ) {
                                     saveState = true
                                 }
-
                                 launchSingleTop = true
                                 restoreState = true
                             }
@@ -122,31 +203,30 @@ fun SportProNavGraph(
                                 fontSize = 10.sp
                             )
                         },
-                        colors = androidx.compose.material3.NavigationBarItemDefaults.colors(
-                            selectedIconColor = Color(0xFFFF6600),
-                            selectedTextColor = Color(0xFFFF6600),
-                            indicatorColor = Color(0xFFFF6600).copy(alpha = 0.15f),
-                            unselectedIconColor = Color(0xFF9A9CA2),
-                            unselectedTextColor = Color(0xFF9A9CA2)
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     )
                 }
             }
         }
     ) { innerPadding ->
-
         NavHost(
             navController = navController,
             startDestination = SportProRoute.Home.route,
             modifier = Modifier
                 .padding(innerPadding)
-                .background(Color(0xFF0D0F12))
+                .background(MaterialTheme.colorScheme.background)
         ) {
-
             composable(SportProRoute.Home.route) {
-                PlaceholderScreen(
-                    title = "SPORT PRO",
-                    subtitle = "Bienvenido $userEmail"
+                HomeScreenContent(
+                    userEmail = userEmail,
+                    onLogout = onLogout,
+                    isLoading = isLoading
                 )
             }
 
@@ -165,7 +245,6 @@ fun SportProNavGraph(
             }
 
             composable(SportProRoute.Community.route) {
-
                 CommunityScreen(
                     onCreatePostClick = {
                         navController.navigate(
@@ -174,13 +253,102 @@ fun SportProNavGraph(
                     }
                 )
             }
-            composable(SportProRoute.CreatePost.route) {
 
+            composable(SportProRoute.CreatePost.route) {
                 CreatePostScreen(
                     onBack = {
                         navController.popBackStack()
                     }
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeScreenContent(
+    userEmail: String,
+    onLogout: () -> Unit,
+    isLoading: Boolean
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Sport",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Pro",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "¡Bienvenido de nuevo!",
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = userEmail,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp
+                )
+
+                Spacer(modifier = Modifier.height(32.dp))
+
+                Button(
+                    onClick = onLogout,
+                    enabled = !isLoading,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF5252)
+                    )
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    } else {
+                        Text(
+                            text = "CERRAR SESIÓN",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                    }
+                }
             }
         }
     }
@@ -194,21 +362,22 @@ private fun PlaceholderScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0D0F12)),
+            .background(MaterialTheme.colorScheme.background),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-
         Text(
             text = title,
-            color = Color(0xFFFF6600),
+            color = MaterialTheme.colorScheme.primary,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold
         )
 
+        Spacer(modifier = Modifier.height(8.dp))
+
         Text(
             text = subtitle,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onBackground,
             fontSize = 14.sp
         )
     }

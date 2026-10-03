@@ -22,6 +22,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -68,7 +69,7 @@ fun CreatePostScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0D0F12))
+            .background(MaterialTheme.colorScheme.background)
             .padding(16.dp)
     ) {
 
@@ -82,13 +83,13 @@ fun CreatePostScreen(
                 Icon(
                     imageVector = Icons.Default.ArrowBack,
                     contentDescription = "Volver",
-                    tint = Color.White
+                    tint = MaterialTheme.colorScheme.onBackground
                 )
             }
 
             Text(
                 text = "NUEVA PUBLICACIÓN",
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -98,7 +99,7 @@ fun CreatePostScreen(
 
         Text(
             text = "PUBLICACIÓN",
-            color = Color(0xFF9A9CA2),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold
         )
@@ -121,14 +122,14 @@ fun CreatePostScreen(
                 )
             },
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color(0xFFFF6600),
-                unfocusedBorderColor = Color(0xFF2A2E35),
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                focusedContainerColor = Color(0xFF161920),
-                unfocusedContainerColor = Color(0xFF161920),
-                focusedPlaceholderColor = Color(0xFF777A80),
-                unfocusedPlaceholderColor = Color(0xFF777A80)
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant,
+                focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                focusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant
             ),
             shape = RoundedCornerShape(12.dp)
         )
@@ -137,7 +138,7 @@ fun CreatePostScreen(
 
         Text(
             text = "${content.length}/1000",
-            color = Color(0xFF777A80),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 11.sp,
             modifier = Modifier.align(Alignment.End)
         )
@@ -146,7 +147,7 @@ fun CreatePostScreen(
 
         Text(
             text = "VISIBILIDAD",
-            color = Color(0xFF9A9CA2),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold
         )
@@ -159,12 +160,12 @@ fun CreatePostScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
-                        color = Color(0xFF161920),
+                        color = MaterialTheme.colorScheme.surface,
                         shape = RoundedCornerShape(12.dp)
                     )
                     .border(
                         width = 1.dp,
-                        color = Color(0xFF2A2E35),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(12.dp)
                     )
                     .clickable {
@@ -176,14 +177,14 @@ fun CreatePostScreen(
 
                 Text(
                     text = visibilityText(selectedVisibility),
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f)
                 )
 
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = null,
-                    tint = Color(0xFF9A9CA2)
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
@@ -232,12 +233,12 @@ fun CreatePostScreen(
                 onClick = onBack,
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF161920)
+                    containerColor = MaterialTheme.colorScheme.surface
                 )
             ) {
                 Text(
                     text = "CANCELAR",
-                    color = Color(0xFFFF6600)
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
 
@@ -255,8 +256,8 @@ fun CreatePostScreen(
                             !uiState.isPublishing,
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFFF6600),
-                    disabledContainerColor = Color(0xFF61351B)
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
                 )
             ) {
 
