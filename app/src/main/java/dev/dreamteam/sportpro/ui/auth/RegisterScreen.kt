@@ -45,16 +45,16 @@ fun RegisterScreen(
             // Logo / Title
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "SPORT",
+                    text = "Sport",
                     color = Color(0xFFFF6600),
-                    fontSize = 28.sp,
+                    fontSize = 36.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 Text(
-                    text = "PRO",
+                    text = "Pro",
                     color = Color.White,
-                    fontSize = 28.sp,
+                    fontSize = 36.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -183,9 +183,7 @@ fun RegisterScreen(
             // Register Button
             Button(
                 onClick = {
-                    if (email.isBlank() || password.isBlank() || confirmPassword.isBlank()) {
-                        localError = "Por favor completa todos los campos"
-                    } else if (password != confirmPassword) {
+                    if (password != confirmPassword) {
                         localError = "Las contraseñas no coinciden"
                     } else {
                         localError = null
@@ -228,7 +226,7 @@ fun RegisterScreen(
                     color = Color(0xFFFF6600),
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
-                    modifier = Modifier.clickable(enabled = !isLoading) { onNavigateToLogin() }
+                    modifier = Modifier.clickable { onNavigateToLogin() }
                 )
             }
         }

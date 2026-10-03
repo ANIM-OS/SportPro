@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -21,10 +20,10 @@ fun RoleSelectionScreen(
     userEmail: String,
     userName: String = "Usuario SportPro",
     onEnterClick: (Set<String>) -> Unit,
-    onCancelClick: () -> Unit,
-    isLoading: Boolean = false
+    isLoading: Boolean = false,
+    onCancelClick: () -> Unit
 ) {
-    var selectedRoles by rememberSaveable { mutableStateOf(setOf("JUGADOR")) }
+    var selectedRoles by remember { mutableStateOf(setOf("JUGADOR")) }
 
     val roles = listOf(
         "JUGADOR" to Color(0xFFFF6600),
@@ -49,16 +48,16 @@ fun RoleSelectionScreen(
             // Logo / Title
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "SPORT",
+                    text = "Sport",
                     color = Color(0xFFFF6600),
-                    fontSize = 28.sp,
+                    fontSize = 36.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 Text(
-                    text = "PRO",
+                    text = "Pro",
                     color = Color.White,
-                    fontSize = 28.sp,
+                    fontSize = 36.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -147,7 +146,6 @@ fun RoleSelectionScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp),
-                        enabled = !isLoading,
                         shape = RoundedCornerShape(12.dp),
                         border = BorderStroke(if (isSelected) 2.dp else 1.dp, if (isSelected) roleColor else Color(0xFF2A2E35)),
                         colors = ButtonDefaults.outlinedButtonColors(
@@ -171,32 +169,29 @@ fun RoleSelectionScreen(
                 color = Color.Gray,
                 fontSize = 12.sp
             )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "El rol Administrador solo puede ser asignado internamente.",
-                color = Color.DarkGray,
-                fontSize = 11.sp
-            )
 
             Spacer(modifier = Modifier.height(28.dp))
 
             // Enter Button
             Button(
                 onClick = { onEnterClick(selectedRoles) },
-                enabled = !isLoading && selectedRoles.isNotEmpty(),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp),
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600)),
+                enabled = !isLoading
             ) {
-                if (isLoading) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
-                else Text(
-                    text = "ENTRAR A SPORT PRO",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
+                if (isLoading) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                } else {
+                    Text(
+                        text = "ENTRAR A SPORT PRO",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -206,7 +201,7 @@ fun RoleSelectionScreen(
                     text = "Cancelar y volver al inicio de sesión",
                     color = Color.Gray,
                     fontSize = 13.sp,
-                    modifier = Modifier.clickable { onCancelClick() }
+                    modifier = Modifier.clickable(enabled = !isLoading) { onCancelClick() }
                 )
             }
         }

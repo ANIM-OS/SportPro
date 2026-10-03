@@ -1,8 +1,8 @@
 package dev.dreamteam.sportpro.ui.auth
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,11 +11,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.dreamteam.sportpro.R
 
 @Composable
 fun LoginScreen(
@@ -23,7 +25,6 @@ fun LoginScreen(
     onGoogleLoginClick: () -> Unit,
     onForgotPasswordClick: (String) -> Unit,
     onNavigateToRegister: () -> Unit,
-    onDemoSelected: (String, String) -> Unit,
     errorMessage: String? = null,
     isLoading: Boolean = false,
     isGoogleLoading: Boolean = false
@@ -31,13 +32,6 @@ fun LoginScreen(
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
-    var expandedDemo by remember { mutableStateOf(false) }
-
-    val demoAccounts = listOf(
-        "demo.jugador@sportpro.dev" to "password123",
-        "demo.entrenador@sportpro.dev" to "password123",
-        "demo.padre@sportpro.dev" to "password123"
-    )
 
     Box(
         modifier = Modifier
@@ -56,26 +50,26 @@ fun LoginScreen(
             // Logo / Title
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "SPORT",
+                    text = "Sport",
                     color = Color(0xFFFF6600),
-                    fontSize = 28.sp,
+                    fontSize = 40.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 Text(
-                    text = "PRO",
+                    text = "Pro",
                     color = Color.White,
-                    fontSize = 28.sp,
+                    fontSize = 40.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(36.dp))
 
             Text(
                 text = "BIENVENIDO",
                 color = Color.White,
-                fontSize = 24.sp,
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(4.dp))
@@ -213,7 +207,7 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Google Button
+            // Google Button with official Google Vector Logo
             OutlinedButton(
                 onClick = onGoogleLoginClick,
                 enabled = !isLoading,
@@ -227,6 +221,13 @@ fun LoginScreen(
                 if (isGoogleLoading) {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
                     Spacer(modifier = Modifier.width(12.dp))
+                } else {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_google),
+                        contentDescription = "Google Logo",
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
                 }
                 Text(
                     text = if (isGoogleLoading) "Conectando con Google…" else "Continuar con Google",
@@ -236,75 +237,7 @@ fun LoginScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Divider "o prueba con una cuenta demo"
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                HorizontalDivider(modifier = Modifier.weight(1f), color = Color(0xFF2A2E35))
-                Text(
-                    text = "  o prueba con una cuenta demo  ",
-                    color = Color.Gray,
-                    fontSize = 12.sp
-                )
-                HorizontalDivider(modifier = Modifier.weight(1f), color = Color(0xFF2A2E35))
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Demo Accounts Dropdown Box
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-                    .background(Color(0xFF161920), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color(0xFF2A2E35), RoundedCornerShape(12.dp))
-                    .clickable(enabled = !isLoading) { expandedDemo = true }
-                    .padding(horizontal = 16.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Cuentas de prueba (prototipo)",
-                        color = Color.Gray,
-                        fontSize = 14.sp
-                    )
-                    Text(
-                        text = "▼",
-                        color = Color.Gray,
-                        fontSize = 12.sp
-                    )
-                }
-
-                DropdownMenu(
-                    expanded = expandedDemo,
-                    onDismissRequest = { expandedDemo = false },
-                    modifier = Modifier
-                        .fillMaxWidth(0.855f)
-                        .background(Color(0xFF161920))
-                ) {
-                    demoAccounts.forEach { (demoEmail, demoPass) ->
-                        DropdownMenuItem(
-                            enabled = !isLoading,
-                            text = { Text(text = demoEmail, color = Color.White) },
-                            onClick = {
-                                expandedDemo = false
-                                email = demoEmail
-                                password = demoPass
-                                onDemoSelected(demoEmail, demoPass)
-                            }
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
             // Register Link
             Row(

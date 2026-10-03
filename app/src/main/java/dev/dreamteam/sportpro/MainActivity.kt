@@ -155,9 +155,6 @@ class MainActivity : ComponentActivity() {
                                 errorMessage = null
                                 currentScreen = Screen.REGISTER
                             },
-                            onDemoSelected = { email, pass ->
-                                authViewModel.login(email, pass)
-                            },
                             errorMessage = errorMessage,
                             isLoading = isLoading,
                             isGoogleLoading = isGoogleLoading
@@ -203,9 +200,9 @@ fun HomeScreen(userEmail: String, onLogout: () -> Unit, isLoading: Boolean = fal
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = "SPORT", color = Color(0xFFFF6600), fontSize = 32.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "PRO", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                Text(text = "Sport", color = Color(0xFFFF6600), fontSize = 38.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(text = "Pro", color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(modifier = Modifier.height(16.dp))
             Text(text = "¡Bienvenido de nuevo!", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
