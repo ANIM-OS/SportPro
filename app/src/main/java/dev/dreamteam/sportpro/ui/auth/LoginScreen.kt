@@ -75,7 +75,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "Inicia sesión para continuar",
-                color = Color.Gray,
+                color = Color.White,
                 fontSize = 14.sp
             )
 
