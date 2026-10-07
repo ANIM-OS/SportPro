@@ -54,6 +54,8 @@ class MainActivity : ComponentActivity() {
             SportProTheme(darkTheme = isDarkTheme) {
                 val authViewModel: AuthViewModel = viewModel()
                 val authState by authViewModel.authState.collectAsState()
+                val sessionRoles by authViewModel.sessionRoles.collectAsState()
+                val coachApproved by authViewModel.coachApproved.collectAsState()
                 val currentUser = FirebaseAuth.getInstance().currentUser
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
@@ -68,6 +70,7 @@ class MainActivity : ComponentActivity() {
                 val isLoading = authState is AuthState.Loading || isSigningOut
                 val isGoogleLoading = (authState as? AuthState.Loading)?.isGoogle == true
                 var registeredEmail by remember { mutableStateOf(currentUser?.email ?: "") }
+                var editingRoles by remember { mutableStateOf(false) }
 
                 // Handle AuthState changes
                 LaunchedEffect(authState) {
@@ -79,6 +82,7 @@ class MainActivity : ComponentActivity() {
                             errorMessage = null
                             registeredEmail = FirebaseAuth.getInstance().currentUser?.email ?: "usuario@sportpro.dev"
                             currentScreen = if (state.needsRoleSelection) Screen.ROLE_SELECTION else Screen.HOME
+                            if (!state.needsRoleSelection) editingRoles = false
                             authViewModel.resetState()
                         }
                         is AuthState.Error -> {
@@ -101,7 +105,7 @@ class MainActivity : ComponentActivity() {
                                 Log.w("GoogleSignIn", "Could not clear credential state", e)
                                 Toast.makeText(context, "Sesión cerrada. No se pudo limpiar el selector de cuentas de Google", Toast.LENGTH_LONG).show()
                             } finally {
-                                authViewModel.resetState()
+                                authViewModel.clearSession()
                                 errorMessage = null
                                 currentScreen = Screen.LOGIN
                                 isSigningOut = false
@@ -182,14 +186,26 @@ class MainActivity : ComponentActivity() {
                             userEmail = registeredEmail,
                             userName = registeredEmail.substringBefore("@").replace(".", " ").replaceFirstChar { it.uppercase() },
                             onEnterClick = { roles -> authViewModel.saveRoles(roles) },
+                            initialRoles = sessionRoles.map { it.code }.toSet(),
                             isLoading = isLoading,
-                            onCancelClick = signOut,
+                            onCancelClick = {
+                                if (editingRoles) {
+                                    editingRoles = false
+                                    currentScreen = Screen.HOME
+                                } else signOut()
+                            },
                             isDarkTheme = isDarkTheme,
                             onToggleTheme = { isDarkTheme = !isDarkTheme }
                         )
                         Screen.HOME -> SportProNavGraph(
                             userEmail = FirebaseAuth.getInstance().currentUser?.email ?: registeredEmail,
+                            roles = sessionRoles,
+                            coachApproved = coachApproved,
                             onLogout = signOut,
+                            onEditRoles = {
+                                editingRoles = true
+                                currentScreen = Screen.ROLE_SELECTION
+                            },
                             isLoading = isSigningOut,
                             isDarkTheme = isDarkTheme,
                             onToggleTheme = { isDarkTheme = !isDarkTheme }

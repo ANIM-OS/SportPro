@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -46,8 +47,13 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import dev.dreamteam.sportpro.ui.auth.AppRole
+import dev.dreamteam.sportpro.ui.auth.RoleAccess
+import dev.dreamteam.sportpro.ui.auth.RoleCapability
 import dev.dreamteam.sportpro.ui.community.CommunityScreen
 import dev.dreamteam.sportpro.ui.community.CreatePostScreen
+import dev.dreamteam.sportpro.ui.teams.TeamsScreen
+import dev.dreamteam.sportpro.ui.teams.CreateTeamScreen
 
 sealed class SportProRoute(
     val route: String,
@@ -77,13 +83,26 @@ sealed class SportProRoute(
         route = "create_post",
         title = "Nueva publicación"
     )
+
+    data object Teams : SportProRoute(
+        route = "teams",
+        title = "Equipos"
+    )
+
+    data object CreateTeam : SportProRoute(
+        route = "create_team",
+        title = "Nuevo equipo"
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SportProNavGraph(
     userEmail: String,
+    roles: Set<AppRole>,
+    coachApproved: Boolean,
     onLogout: () -> Unit,
+    onEditRoles: () -> Unit,
     isLoading: Boolean = false,
     isDarkTheme: Boolean = true,
     onToggleTheme: () -> Unit = {}
@@ -94,7 +113,8 @@ fun SportProNavGraph(
         SportProRoute.Home,
         SportProRoute.Live,
         SportProRoute.Statistics,
-        SportProRoute.Community
+        SportProRoute.Community,
+        SportProRoute.Teams
     )
 
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
@@ -122,6 +142,19 @@ fun SportProNavGraph(
                     }
                 },
                 actions = {
+                    // Roles management button
+                    TextButton(
+                        onClick = onEditRoles,
+                        modifier = Modifier.padding(end = 4.dp)
+                    ) {
+                        Text(
+                            text = "Roles",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+
                     // Theme toggle pill button
                     Surface(
                         onClick = onToggleTheme,
@@ -193,6 +226,8 @@ fun SportProNavGraph(
                                     SportProRoute.Statistics -> Icons.Default.BarChart
                                     SportProRoute.Community -> Icons.Default.Groups
                                     SportProRoute.CreatePost -> Icons.Default.Add
+                                    SportProRoute.Teams -> Icons.Default.Shield
+                                    SportProRoute.CreateTeam -> Icons.Default.Add
                                 },
                                 contentDescription = item.title
                             )
@@ -246,6 +281,7 @@ fun SportProNavGraph(
 
             composable(SportProRoute.Community.route) {
                 CommunityScreen(
+                    canCreatePost = RoleAccess.can(roles, RoleCapability.CREATE_POST),
                     onCreatePostClick = {
                         navController.navigate(
                             SportProRoute.CreatePost.route
@@ -255,11 +291,43 @@ fun SportProNavGraph(
             }
 
             composable(SportProRoute.CreatePost.route) {
-                CreatePostScreen(
-                    onBack = {
-                        navController.popBackStack()
+                RoleGate(roles, RoleCapability.CREATE_POST, true) {
+                    CreatePostScreen(
+                        onBack = {
+                            navController.popBackStack()
+                        }
+                    )
+                }
+            }
+
+            composable(SportProRoute.Teams.route) {
+                val backStackEntry by navController.currentBackStackEntryAsState()
+                val createdTeamId = backStackEntry?.savedStateHandle?.get<String>("createdTeamId")
+                TeamsScreen(
+                    canCreateTeam = RoleAccess.can(roles, RoleCapability.CREATE_TEAM, true),
+                    coachNeedsApproval = false,
+                    canJoinWithCode = RoleAccess.can(roles, RoleCapability.JOIN_WITH_CODE),
+                    newlyCreatedTeamId = createdTeamId,
+                    onNewTeamOpened = { backStackEntry?.savedStateHandle?.remove<String>("createdTeamId") },
+                    onCreateTeamClick = {
+                        navController.navigate(SportProRoute.CreateTeam.route)
                     }
                 )
+            }
+
+            composable(SportProRoute.CreateTeam.route) {
+                RoleGate(roles, RoleCapability.CREATE_TEAM, true) {
+                    CreateTeamScreen(
+                        canCreateTeam = RoleAccess.can(roles, RoleCapability.CREATE_TEAM, true),
+                        onBack = {
+                            navController.popBackStack()
+                        },
+                        onTeamCreated = { teamId ->
+                            navController.previousBackStackEntry?.savedStateHandle?.set("createdTeamId", teamId)
+                            navController.popBackStack()
+                        }
+                    )
+                }
             }
         }
     }
@@ -351,6 +419,15 @@ private fun HomeScreenContent(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun RoleGate(roles: Set<AppRole>, capability: RoleCapability, coachApproved: Boolean = true, content: @Composable () -> Unit) {
+    if (RoleAccess.can(roles, capability, coachApproved)) {
+        content()
+    } else {
+        PlaceholderScreen(title = "SIN ACCESO", subtitle = "Tu rol no permite abrir esta página")
     }
 }
 

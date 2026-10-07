@@ -20,12 +20,13 @@ fun RoleSelectionScreen(
     userEmail: String,
     userName: String = "Usuario SportPro",
     onEnterClick: (Set<String>) -> Unit,
+    initialRoles: Set<String> = setOf("JUGADOR"),
     isLoading: Boolean = false,
     onCancelClick: () -> Unit,
     isDarkTheme: Boolean = true,
     onToggleTheme: () -> Unit = {}
 ) {
-    var selectedRoles by remember { mutableStateOf(setOf("JUGADOR")) }
+    var selectedRoles by remember(initialRoles) { mutableStateOf(initialRoles.ifEmpty { setOf("JUGADOR") }) }
 
     val roles = listOf(
         "JUGADOR" to Color(0xFFFF6600),
@@ -192,7 +193,7 @@ fun RoleSelectionScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "Puedes seleccionar más de uno. Podrás cambiar tu rol activo dentro de la app.",
+                text = "Puedes seleccionar más de uno. Estos roles describen tu perfil; no te dan control sobre equipos de otras personas.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp
             )

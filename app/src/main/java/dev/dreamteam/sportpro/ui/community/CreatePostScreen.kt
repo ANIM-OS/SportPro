@@ -59,6 +59,9 @@ fun CreatePostScreen(
     var expanded by remember {
         mutableStateOf(false)
     }
+    var selectedTeamId by remember { mutableStateOf<String?>(null) }
+    var teamExpanded by remember { mutableStateOf(false) }
+    val audienceTeams = uiState.postTargets.filter { it.type == selectedVisibility }
 
     val visibilityOptions = listOf(
         "TODOS",
@@ -205,9 +208,54 @@ fun CreatePostScreen(
                         },
                         onClick = {
                             selectedVisibility = visibility
+                            selectedTeamId = null
                             expanded = false
                         }
                     )
+                }
+            }
+        }
+
+        if (selectedVisibility != "TODOS") {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = if (selectedVisibility == "EQUIPO") "EQUIPO DESTINO" else "ACADEMIA DESTINO",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            if (audienceTeams.isEmpty()) {
+                Text(
+                    text = uiState.postTargetsError ?: "No perteneces a ningún ${if (selectedVisibility == "EQUIPO") "equipo" else "academia"} disponible.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp
+                )
+            } else {
+                val selectedTeam = audienceTeams.firstOrNull { it.id == selectedTeamId }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                        .clickable { teamExpanded = true }
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = selectedTeam?.name ?: "Selecciona un destino",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                DropdownMenu(expanded = teamExpanded, onDismissRequest = { teamExpanded = false }) {
+                    audienceTeams.forEach { team ->
+                        DropdownMenuItem(
+                            text = { Text(team.name) },
+                            onClick = { selectedTeamId = team.id; teamExpanded = false }
+                        )
+                    }
                 }
             }
         }
@@ -246,13 +294,15 @@ fun CreatePostScreen(
                 onClick = {
                     viewModel.createPost(
                         content = content,
-                        visibility = selectedVisibility
+                        visibility = selectedVisibility,
+                        teamId = selectedTeamId
                     ) {
                         onBack()
                     }
                 },
                 enabled =
                     content.isNotBlank() &&
+                            (selectedVisibility == "TODOS" || selectedTeamId in audienceTeams.map { it.id }) &&
                             !uiState.isPublishing,
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(

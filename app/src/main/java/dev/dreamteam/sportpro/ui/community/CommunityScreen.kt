@@ -26,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -44,6 +45,7 @@ import java.util.Locale
 @Composable
 fun CommunityScreen(
     onCreatePostClick: () -> Unit,
+    canCreatePost: Boolean,
     viewModel: CommunityViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -51,16 +53,18 @@ fun CommunityScreen(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = onCreatePostClick,
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = Color.White,
-                shape = CircleShape
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Nueva publicación"
-                )
+            if (canCreatePost) {
+                FloatingActionButton(
+                    onClick = onCreatePostClick,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = Color.White,
+                    shape = CircleShape
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Nueva publicación"
+                    )
+                }
             }
         }
     ) { paddingValues ->
@@ -89,6 +93,11 @@ fun CommunityScreen(
             )
 
             Spacer(modifier = Modifier.height(20.dp))
+
+            uiState.moderationError?.let { message ->
+                Text(text = message, color = MaterialTheme.colorScheme.error)
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             when {
 
@@ -150,7 +159,12 @@ fun CommunityScreen(
                             key = { it.id }
                         ) { post ->
 
-                            CommunityPostCard(post = post)
+                            CommunityPostCard(
+                                post = post,
+                                canModerate = uiState.canModerate,
+                                isModerating = uiState.moderatingPostId == post.id,
+                                onModerate = { viewModel.moderatePost(post.id) }
+                            )
                         }
                     }
                 }
@@ -161,7 +175,10 @@ fun CommunityScreen(
 
 @Composable
 private fun CommunityPostCard(
-    post: CommunityPost
+    post: CommunityPost,
+    canModerate: Boolean,
+    isModerating: Boolean,
+    onModerate: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -241,6 +258,12 @@ private fun CommunityPostCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp
             )
+
+            if (canModerate) {
+                TextButton(onClick = onModerate, enabled = !isModerating) {
+                    Text(if (isModerating) "Ocultando…" else "Ocultar publicación")
+                }
+            }
         }
     }
 }
