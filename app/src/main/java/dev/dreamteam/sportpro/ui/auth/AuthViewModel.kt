@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,6 +21,20 @@ class AuthViewModel : ViewModel() {
     private val firestore = FirebaseFirestore.getInstance()
     private val _authState = MutableStateFlow<AuthState>(AuthState.Idle)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
+    private val _sessionRoles = MutableStateFlow<Set<AppRole>>(emptySet())
+    val sessionRoles: StateFlow<Set<AppRole>> = _sessionRoles.asStateFlow()
+    private val _coachApproved = MutableStateFlow(false)
+    val coachApproved: StateFlow<Boolean> = _coachApproved.asStateFlow()
+    private var coachApprovalListener: ListenerRegistration? = null
+
+    private fun watchCoachApproval(userId: String) {
+        coachApprovalListener?.remove()
+        _coachApproved.value = false
+        coachApprovalListener = firestore.collection("coachApprovals").document(userId)
+            .addSnapshotListener { snapshot, error ->
+                _coachApproved.value = error == null && snapshot?.getBoolean("approved") == true
+            }
+    }
 
     fun checkSession() {
         if (_authState.value is AuthState.Loading) return
@@ -51,7 +66,11 @@ class AuthViewModel : ViewModel() {
             .addOnSuccessListener { result ->
                 val user = result.user
                 if (user == null) _authState.value = AuthState.Error("No se pudo crear la cuenta")
-                else _authState.value = AuthState.Success(user.uid, isNewUser = true, needsRoleSelection = true)
+                else {
+                    _sessionRoles.value = emptySet()
+                    watchCoachApproval(user.uid)
+                    _authState.value = AuthState.Success(user.uid, isNewUser = true, needsRoleSelection = true)
+                }
             }
             .addOnFailureListener { error -> fail(error, "No se pudo crear la cuenta") }
     }
@@ -80,19 +99,27 @@ class AuthViewModel : ViewModel() {
             .addOnFailureListener { error -> fail(error, "No se pudo iniciar sesión con Google") }
     }
 
+    // Estos roles describen el perfil elegido por el usuario. La autoridad
+    // sobre un equipo se comprueba con el propietario de ese equipo.
     fun saveRoles(roles: Set<String>) {
         val user = auth.currentUser ?: run {
             _authState.value = AuthState.Error("Tu sesión expiró. Inicia sesión nuevamente")
             return
         }
-        if (roles.isEmpty()) {
-            _authState.value = AuthState.Error("Selecciona al menos un rol")
+        val parsedRoles = roles.mapNotNull(AppRole::fromCode).toSet()
+        if (parsedRoles.isEmpty()) {
+            _authState.value = AuthState.Error("Selecciona al menos un rol válido")
             return
         }
+        val normalizedRoleCodes = parsedRoles.map { it.code }.toList()
         _authState.value = AuthState.Loading()
         firestore.collection("users").document(user.uid)
-            .set(mapOf("email" to user.email, "roles" to roles.toList(), "profileComplete" to true))
-            .addOnSuccessListener { _authState.value = AuthState.Success(user.uid) }
+            .set(mapOf("email" to user.email, "roles"  to normalizedRoleCodes, "profileComplete" to true))
+            .addOnSuccessListener {
+                _sessionRoles.value = parsedRoles
+                watchCoachApproval(user.uid)
+                _authState.value = AuthState.Success(user.uid)
+            }
             .addOnFailureListener { error -> fail(error, "No se pudieron guardar tus roles") }
     }
 
@@ -113,19 +140,24 @@ class AuthViewModel : ViewModel() {
             _authState.value = AuthState.Error("No se pudo validar la sesión")
             return
         }
+        watchCoachApproval(userId)
         if (isNewUser) {
+            _sessionRoles.value = emptySet()
             _authState.value = AuthState.Success(userId, isNewUser = true, needsRoleSelection = true)
             return
         }
         firestore.collection("users").document(userId).get()
             .addOnSuccessListener { profile ->
                 if (!profile.exists()) {
+                    _sessionRoles.value = emptySet()
                     _authState.value = AuthState.Success(userId, isNewUser = true, needsRoleSelection = true)
                     return@addOnSuccessListener
                 }
                 val roles = profile.get("roles") as? List<*>
                 val profileComplete = profile.getBoolean("profileComplete") == true
-                val hasRoles = roles?.isNotEmpty() == true
+                val parsedRoles = roles?.filterIsInstance<String>()?.mapNotNull(AppRole::fromCode)?.toSet() ?: emptySet()
+                val hasRoles = parsedRoles.isNotEmpty()
+                _sessionRoles.value = if (profileComplete && hasRoles) parsedRoles else emptySet()
                 _authState.value = AuthState.Success(
                     userId = userId,
                     needsRoleSelection = !(profileComplete && hasRoles)
@@ -139,4 +171,12 @@ class AuthViewModel : ViewModel() {
     }
 
     fun resetState() { _authState.value = AuthState.Idle }
+
+    fun clearSession() {
+        coachApprovalListener?.remove()
+        coachApprovalListener = null
+        _coachApproved.value = false
+        _sessionRoles.value = emptySet()
+        resetState()
+    }
 }

@@ -26,6 +26,14 @@ Una misma cuenta puede tener uno o varios roles dentro de SPORT PRO:
 
 Esto permite contemplar casos como un entrenador que también es jugador o un padre/tutor que también forma parte del cuerpo técnico.
 
+La aplicación combina los permisos de todos los roles de una cuenta. Actualmente, Jugador, Entrenador y Padre/Tutor pueden abrir Inicio, En vivo, Estadísticas, Comunidad y Equipos. Jugador y Entrenador pueden publicar en Comunidad; para registrar equipos o academias se requiere el rol Entrenador. Las pantallas de creación se protegen también al navegar directamente a ellas. Las páginas específicas de padres y la vinculación con sus hijos aún no están implementadas.
+
+La pestaña Equipos solo muestra equipos creados por la cuenta o equipos a los que se unió aceptando una invitación. El entrenador creador puede invitar a otra cuenta por su correo de registro. Para recibir y aceptar invitaciones, esa cuenta debe verificar su correo; la pantalla Equipos permite enviar el enlace de verificación y actualizar su estado. Firestore comprueba los mismos permisos de lectura, creación e invitación.
+
+El entrenador puede crear una academia y vincular equipos que administra a esa academia. La ficha de la academia lista los equipos asociados; cada equipo conserva su ficha y gestión propia. No se puede eliminar una academia mientras tenga equipos vinculados. El propietario puede editar el nombre, la ciudad, la descripción, los colores y el año de fundación, subir una foto de perfil y eliminar el equipo. Al eliminarlo, la app borra primero sus invitaciones y membresías. Las fotos nuevas se reducen y se guardan junto al equipo en Firestore; los logos que ya estaban en Firebase Storage siguen siendo visibles.
+
+Cada equipo tiene una vista de Plantilla y Alineación por categoría. El entrenador puede editar nombre, categoría y dorsal de cada integrante, retirar jugadores y guardar una formación 4-3-3, 4-4-2 o 3-5-2 con asignaciones por posición. Al crear el equipo se genera un QR de registro de un solo uso y 15 minutos de validez; la ficha lo renueva al usarse o vencer. Solo el código activo del equipo permite unirse. Un jugador con correo verificado y rol JUGADOR puede escanearlo desde Equipos, confirmar su nombre y categoría y unirse; el equipo sigue siendo privado. Los QR, las membresías y las alineaciones se borran cuando el propietario elimina el equipo.
+
 ## Autenticación
 
 El proyecto contempla Firebase Authentication para gestionar el acceso de los usuarios mediante:
@@ -72,6 +80,10 @@ Próximos objetivos:
 Las credenciales, claves de API y archivos con información sensible no deben almacenarse en el repositorio.
 
 Las variables de entorno y credenciales privadas deberán mantenerse fuera del control de versiones mediante `.gitignore`.
+
+Para habilitar la moderación de comunidad, un administrador del proyecto debe crear en Firestore el documento `moderators/{uid}` para la cuenta designada. La aplicación solo permite a esa cuenta ocultar publicaciones; los usuarios no pueden crear documentos de moderadores mediante las reglas de Firestore. Tras asignar el permiso, el moderador debe volver a abrir la pantalla de Comunidad.
+
+La configuración actual de Firestore permite registrar equipos a las cuentas con el rol `ENTRENADOR`; no exige un documento de aprobación adicional. Los propietarios de equipos existentes conservan la administración de sus equipos.
 
 ## Licencia
 
