@@ -43,7 +43,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
+import androidx.navigation.navArgument
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
@@ -52,6 +54,14 @@ import dev.dreamteam.sportpro.ui.auth.RoleAccess
 import dev.dreamteam.sportpro.ui.auth.RoleCapability
 import dev.dreamteam.sportpro.ui.community.CommunityScreen
 import dev.dreamteam.sportpro.ui.community.CreatePostScreen
+import dev.dreamteam.sportpro.ui.community.PostCommentsScreen
+import dev.dreamteam.sportpro.ui.events.EventCatalogEditScreen
+import dev.dreamteam.sportpro.ui.events.EventCatalogScreen
+import dev.dreamteam.sportpro.ui.events.EventDetailScreen
+import dev.dreamteam.sportpro.ui.events.EventEditScreen
+import dev.dreamteam.sportpro.ui.events.EventHistoryScreen
+import dev.dreamteam.sportpro.ui.events.LiveEventsEntryScreen
+import dev.dreamteam.sportpro.ui.events.RegisterEventScreen
 import dev.dreamteam.sportpro.ui.teams.TeamsScreen
 import dev.dreamteam.sportpro.ui.teams.CreateTeamScreen
 
@@ -93,6 +103,67 @@ sealed class SportProRoute(
         route = "create_team",
         title = "Nuevo equipo"
     )
+
+    // ── US-12 · Catálogo configurable de eventos del partido ──
+    data object EventCatalog : SportProRoute(
+        route = "event_catalog",
+        title = "Catálogo de eventos"
+    )
+
+    data object EventCatalogEdit : SportProRoute(
+        route = "event_catalog_edit?typeId={typeId}", // typeId vacío = crear tipo nuevo
+        title = "Tipo de evento"
+    ) {
+        const val ARG_TYPE_ID = "typeId"
+        fun create(typeId: String? = null) =
+            if (typeId == null) "event_catalog_edit" else "event_catalog_edit?typeId=$typeId"
+    }
+
+    // ── US-13 · Registro dinámico de eventos en vivo ──
+    data object RegisterEvent : SportProRoute(
+        route = "register_event/{matchId}",
+        title = "Registrar evento"
+    ) {
+        const val ARG_MATCH_ID = "matchId"
+        fun create(matchId: String) = "register_event/$matchId"
+    }
+
+    // ── US-14 · Corrección y anulación con trazabilidad ──
+    data object EventDetail : SportProRoute(
+        route = "event_detail/{matchId}/{eventId}",
+        title = "Detalle del evento"
+    ) {
+        const val ARG_MATCH_ID = "matchId"
+        const val ARG_EVENT_ID = "eventId"
+        fun create(matchId: String, eventId: String) = "event_detail/$matchId/$eventId"
+    }
+
+    data object EventEdit : SportProRoute(
+        route = "event_edit/{matchId}/{eventId}",
+        title = "Corregir evento"
+    ) {
+        const val ARG_MATCH_ID = "matchId"
+        const val ARG_EVENT_ID = "eventId"
+        fun create(matchId: String, eventId: String) = "event_edit/$matchId/$eventId"
+    }
+
+    data object EventHistory : SportProRoute(
+        route = "event_history/{matchId}/{eventId}",
+        title = "Historial del evento"
+    ) {
+        const val ARG_MATCH_ID = "matchId"
+        const val ARG_EVENT_ID = "eventId"
+        fun create(matchId: String, eventId: String) = "event_history/$matchId/$eventId"
+    }
+
+    // ── US-19 · Comentarios y reacciones ──
+    data object PostComments : SportProRoute(
+        route = "post_comments/{postId}",
+        title = "Comentarios"
+    ) {
+        const val ARG_POST_ID = "postId"
+        fun create(postId: String) = "post_comments/$postId"
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -225,9 +296,9 @@ fun SportProNavGraph(
                                     SportProRoute.Live -> Icons.Default.SportsSoccer
                                     SportProRoute.Statistics -> Icons.Default.BarChart
                                     SportProRoute.Community -> Icons.Default.Groups
-                                    SportProRoute.CreatePost -> Icons.Default.Add
                                     SportProRoute.Teams -> Icons.Default.Shield
-                                    SportProRoute.CreateTeam -> Icons.Default.Add
+                                    // CreatePost, CreateTeam y las rutas de US-12/13/14/19 no están en la barra
+                                    else -> Icons.Default.Add
                                 },
                                 contentDescription = item.title
                             )
@@ -266,9 +337,18 @@ fun SportProNavGraph(
             }
 
             composable(SportProRoute.Live.route) {
-                PlaceholderScreen(
-                    title = "EN VIVO",
-                    subtitle = "US-15 · Marcador y cronología"
+                // TODO(US-15): cuando se integre la pantalla real de En vivo, mover estos
+                // tres callbacks a ella (botón "Catálogo", botón "Registrar evento" y clic en un evento).
+                LiveEventsEntryScreen(
+                    canManageCatalog = RoleAccess.can(roles, RoleCapability.MANAGE_EVENT_CATALOG),
+                    canRegisterEvents = RoleAccess.can(roles, RoleCapability.REGISTER_EVENTS),
+                    onOpenCatalog = { navController.navigate(SportProRoute.EventCatalog.route) },
+                    onRegisterEvent = { matchId ->
+                        navController.navigate(SportProRoute.RegisterEvent.create(matchId))
+                    },
+                    onOpenEvent = { matchId, eventId ->
+                        navController.navigate(SportProRoute.EventDetail.create(matchId, eventId))
+                    }
                 )
             }
 
@@ -286,6 +366,9 @@ fun SportProNavGraph(
                         navController.navigate(
                             SportProRoute.CreatePost.route
                         )
+                    },
+                    onOpenComments = { postId ->
+                        navController.navigate(SportProRoute.PostComments.create(postId))
                     }
                 )
             }
@@ -328,6 +411,119 @@ fun SportProNavGraph(
                         }
                     )
                 }
+            }
+
+            // ───────── US-12 · Catálogo de eventos ─────────
+            composable(SportProRoute.EventCatalog.route) {
+                RoleGate(roles, RoleCapability.MANAGE_EVENT_CATALOG) {
+                    EventCatalogScreen(
+                        onBack = { navController.popBackStack() },
+                        onNewType = { navController.navigate(SportProRoute.EventCatalogEdit.create()) },
+                        onEditType = { typeId ->
+                            navController.navigate(SportProRoute.EventCatalogEdit.create(typeId))
+                        }
+                    )
+                }
+            }
+
+            composable(
+                route = SportProRoute.EventCatalogEdit.route,
+                arguments = listOf(
+                    navArgument(SportProRoute.EventCatalogEdit.ARG_TYPE_ID) {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    }
+                )
+            ) { entry ->
+                RoleGate(roles, RoleCapability.MANAGE_EVENT_CATALOG) {
+                    EventCatalogEditScreen(
+                        typeId = entry.arguments?.getString(SportProRoute.EventCatalogEdit.ARG_TYPE_ID),
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+            }
+
+            // ───────── US-13 · Registro de eventos en vivo ─────────
+            composable(
+                route = SportProRoute.RegisterEvent.route,
+                arguments = listOf(
+                    navArgument(SportProRoute.RegisterEvent.ARG_MATCH_ID) { type = NavType.StringType }
+                )
+            ) { entry ->
+                RoleGate(roles, RoleCapability.REGISTER_EVENTS) {
+                    RegisterEventScreen(
+                        matchId = entry.arguments?.getString(SportProRoute.RegisterEvent.ARG_MATCH_ID).orEmpty(),
+                        onBack = { navController.popBackStack() },
+                        onSaved = { navController.popBackStack() } // vuelve a la cronología
+                    )
+                }
+            }
+
+            // ───────── US-14 · Corrección y anulación ─────────
+            composable(
+                route = SportProRoute.EventDetail.route,
+                arguments = listOf(
+                    navArgument(SportProRoute.EventDetail.ARG_MATCH_ID) { type = NavType.StringType },
+                    navArgument(SportProRoute.EventDetail.ARG_EVENT_ID) { type = NavType.StringType }
+                )
+            ) { entry ->
+                val matchId = entry.arguments?.getString(SportProRoute.EventDetail.ARG_MATCH_ID).orEmpty()
+                val eventId = entry.arguments?.getString(SportProRoute.EventDetail.ARG_EVENT_ID).orEmpty()
+                EventDetailScreen(
+                    matchId = matchId,
+                    eventId = eventId,
+                    canEdit = RoleAccess.can(roles, RoleCapability.EDIT_EVENTS),
+                    onBack = { navController.popBackStack() },
+                    onCorrect = { navController.navigate(SportProRoute.EventEdit.create(matchId, eventId)) },
+                    onVoided = { navController.popBackStack() },
+                    onShowHistory = { navController.navigate(SportProRoute.EventHistory.create(matchId, eventId)) }
+                )
+            }
+
+            composable(
+                route = SportProRoute.EventEdit.route,
+                arguments = listOf(
+                    navArgument(SportProRoute.EventEdit.ARG_MATCH_ID) { type = NavType.StringType },
+                    navArgument(SportProRoute.EventEdit.ARG_EVENT_ID) { type = NavType.StringType }
+                )
+            ) { entry ->
+                RoleGate(roles, RoleCapability.EDIT_EVENTS) {
+                    EventEditScreen(
+                        matchId = entry.arguments?.getString(SportProRoute.EventEdit.ARG_MATCH_ID).orEmpty(),
+                        eventId = entry.arguments?.getString(SportProRoute.EventEdit.ARG_EVENT_ID).orEmpty(),
+                        onBack = { navController.popBackStack() },
+                        onSaved = { navController.popBackStack() }
+                    )
+                }
+            }
+
+            composable(
+                route = SportProRoute.EventHistory.route,
+                arguments = listOf(
+                    navArgument(SportProRoute.EventHistory.ARG_MATCH_ID) { type = NavType.StringType },
+                    navArgument(SportProRoute.EventHistory.ARG_EVENT_ID) { type = NavType.StringType }
+                )
+            ) { entry ->
+                EventHistoryScreen(
+                    matchId = entry.arguments?.getString(SportProRoute.EventHistory.ARG_MATCH_ID).orEmpty(),
+                    eventId = entry.arguments?.getString(SportProRoute.EventHistory.ARG_EVENT_ID).orEmpty(),
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            // ───────── US-19 · Comentarios y reacciones ─────────
+            composable(
+                route = SportProRoute.PostComments.route,
+                arguments = listOf(
+                    navArgument(SportProRoute.PostComments.ARG_POST_ID) { type = NavType.StringType }
+                )
+            ) { entry ->
+                PostCommentsScreen(
+                    postId = entry.arguments?.getString(SportProRoute.PostComments.ARG_POST_ID).orEmpty(),
+                    canComment = RoleAccess.can(roles, RoleCapability.COMMENT_POST),
+                    onBack = { navController.popBackStack() }
+                )
             }
         }
     }

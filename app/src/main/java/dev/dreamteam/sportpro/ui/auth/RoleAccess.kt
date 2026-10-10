@@ -22,7 +22,11 @@ enum class AppRole(val code: String) {
 enum class RoleCapability {
     CREATE_POST,
     CREATE_TEAM,
-    JOIN_WITH_CODE
+    JOIN_WITH_CODE,
+    MANAGE_EVENT_CATALOG, // US-12
+    REGISTER_EVENTS,      // US-13
+    EDIT_EVENTS,          // US-14
+    COMMENT_POST          // US-19
 }
 
 /** Account-wide UI capabilities derived from profile roles. Firestore enforces writes. */
@@ -31,5 +35,9 @@ object RoleAccess {
         RoleCapability.CREATE_POST -> AppRole.PLAYER in roles || AppRole.COACH in roles
         RoleCapability.CREATE_TEAM -> AppRole.COACH in roles
         RoleCapability.JOIN_WITH_CODE -> AppRole.PLAYER in roles
+        RoleCapability.MANAGE_EVENT_CATALOG -> AppRole.COACH in roles
+        RoleCapability.REGISTER_EVENTS -> AppRole.COACH in roles
+        RoleCapability.EDIT_EVENTS -> AppRole.COACH in roles
+        RoleCapability.COMMENT_POST -> roles.isNotEmpty()
     }
 }
