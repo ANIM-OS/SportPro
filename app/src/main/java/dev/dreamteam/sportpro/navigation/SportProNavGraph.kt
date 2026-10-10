@@ -53,7 +53,7 @@ import dev.dreamteam.sportpro.ui.auth.RoleAccess
 import dev.dreamteam.sportpro.ui.auth.RoleCapability
 import dev.dreamteam.sportpro.ui.community.CommunityScreen
 import dev.dreamteam.sportpro.ui.community.CreatePostScreen
-import dev.dreamteam.sportpro.ui.entrenamientos.EntrenamientosScreen
+import dev.dreamteam.sportpro.ui.training.TrainingNavHost
 import dev.dreamteam.sportpro.ui.teams.TeamsScreen
 import dev.dreamteam.sportpro.ui.teams.CreateTeamScreen
 
@@ -325,9 +325,7 @@ fun SportProNavGraph(
             }
 
             composable(SportProRoute.Training.route) {
-                EntrenamientosScreen(
-                    canPlanTraining = RoleAccess.can(roles, RoleCapability.PLAN_TRAINING)
-                )
+                TrainingNavHost(roles = roles)
             }
 
             composable(SportProRoute.CreateTeam.route) {

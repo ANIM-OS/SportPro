@@ -22,8 +22,7 @@ enum class AppRole(val code: String) {
 enum class RoleCapability {
     CREATE_POST,
     CREATE_TEAM,
-    JOIN_WITH_CODE,
-    PLAN_TRAINING
+    JOIN_WITH_CODE
 }
 
 /** Account-wide UI capabilities derived from profile roles. Firestore enforces writes. */
@@ -32,6 +31,5 @@ object RoleAccess {
         RoleCapability.CREATE_POST -> AppRole.PLAYER in roles || AppRole.COACH in roles
         RoleCapability.CREATE_TEAM -> AppRole.COACH in roles
         RoleCapability.JOIN_WITH_CODE -> AppRole.PLAYER in roles
-        RoleCapability.PLAN_TRAINING -> AppRole.COACH in roles
     }
 }

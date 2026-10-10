@@ -8,5 +8,19 @@ service firebase.storage {
         && request.resource.size <= 5 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
     }
+
+    // US-04: foto del jugador. La sube el propio jugador; la ven él, entrenadores y padres o tutores vinculados.
+    match /playerProfiles/{playerId}/photo.jpg {
+      allow read: if request.auth != null && (
+        request.auth.uid == playerId
+        || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+        || (request.auth.token.email_verified == true
+          && firestore.exists(/databases/(default)/documents/playerGuardians/$(playerId + '_' + request.auth.token.email.lower())))
+      );
+      allow write: if request.auth != null
+        && request.auth.uid == playerId
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
   }
 }
