@@ -64,6 +64,8 @@ import dev.dreamteam.sportpro.ui.events.LiveEventsEntryScreen
 import dev.dreamteam.sportpro.ui.events.RegisterEventScreen
 import dev.dreamteam.sportpro.ui.teams.TeamsScreen
 import dev.dreamteam.sportpro.ui.teams.CreateTeamScreen
+import dev.dreamteam.sportpro.ui.live.LiveMatchScreen
+import dev.dreamteam.sportpro.ui.statistics.StatisticsScreen
 
 sealed class SportProRoute(
     val route: String,
@@ -337,26 +339,39 @@ fun SportProNavGraph(
             }
 
             composable(SportProRoute.Live.route) {
-                // TODO(US-15): cuando se integre la pantalla real de En vivo, mover estos
-                // tres callbacks a ella (botón "Catálogo", botón "Registrar evento" y clic en un evento).
-                LiveEventsEntryScreen(
-                    canManageCatalog = RoleAccess.can(roles, RoleCapability.MANAGE_EVENT_CATALOG),
-                    canRegisterEvents = RoleAccess.can(roles, RoleCapability.REGISTER_EVENTS),
-                    onOpenCatalog = { navController.navigate(SportProRoute.EventCatalog.route) },
+
+                LiveMatchScreen(
+                    canManageCatalog = RoleAccess.can(
+                        roles,
+                        RoleCapability.MANAGE_EVENT_CATALOG
+                    ),
+                    canRegisterEvents = RoleAccess.can(
+                        roles,
+                        RoleCapability.REGISTER_EVENTS
+                    ),
+                    onOpenCatalog = {
+                        navController.navigate(
+                            SportProRoute.EventCatalog.route
+                        )
+                    },
                     onRegisterEvent = { matchId ->
-                        navController.navigate(SportProRoute.RegisterEvent.create(matchId))
+                        navController.navigate(
+                            SportProRoute.RegisterEvent.create(matchId)
+                        )
                     },
                     onOpenEvent = { matchId, eventId ->
-                        navController.navigate(SportProRoute.EventDetail.create(matchId, eventId))
+                        navController.navigate(
+                            SportProRoute.EventDetail.create(
+                                matchId,
+                                eventId
+                            )
+                        )
                     }
                 )
             }
 
             composable(SportProRoute.Statistics.route) {
-                PlaceholderScreen(
-                    title = "ESTADÍSTICAS",
-                    subtitle = "US-16 · Rendimiento acumulado"
-                )
+                StatisticsScreen()
             }
 
             composable(SportProRoute.Community.route) {

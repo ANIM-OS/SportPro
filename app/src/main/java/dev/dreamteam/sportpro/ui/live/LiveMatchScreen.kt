@@ -32,6 +32,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 
 data class LiveEventUi(
     val minute: String,
@@ -41,7 +45,14 @@ data class LiveEventUi(
 )
 
 @Composable
-fun LiveMatchScreen() {
+fun LiveMatchScreen(
+    canManageCatalog: Boolean,
+    canRegisterEvents: Boolean,
+    onOpenCatalog: () -> Unit,
+    onRegisterEvent: (String) -> Unit,
+    onOpenEvent: (String, String) -> Unit
+) {
+    val demoMatchId = "demo-match"
 
     // DATOS DEMO
     // Más adelante se reemplazarán por eventos reales de Firestore.
@@ -93,6 +104,58 @@ fun LiveMatchScreen() {
         ScoreCard()
 
         Spacer(modifier = Modifier.height(22.dp))
+
+        if (canRegisterEvents || canManageCatalog) {
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+
+                if (canRegisterEvents) {
+
+                    Button(
+                        onClick = {
+                            onRegisterEvent(demoMatchId)
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFFF6600)
+                        )
+                    ) {
+                        Text(
+                            text = "REGISTRAR EVENTO",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                if (canManageCatalog) {
+
+                    OutlinedButton(
+                        onClick = onOpenCatalog,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color(0xFFFF6600)
+                        ),
+                        border = BorderStroke(
+                            1.dp,
+                            Color(0xFFFF6600)
+                        )
+                    ) {
+                        Text(
+                            text = "CATÁLOGO",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(22.dp))
+        }
 
         Text(
             text = "CRONOLOGÍA DEL PARTIDO",
