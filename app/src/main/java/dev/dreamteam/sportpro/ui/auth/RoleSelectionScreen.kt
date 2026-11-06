@@ -20,10 +20,13 @@ fun RoleSelectionScreen(
     userEmail: String,
     userName: String = "Usuario SportPro",
     onEnterClick: (Set<String>) -> Unit,
+    initialRoles: Set<String> = setOf("JUGADOR"),
     isLoading: Boolean = false,
-    onCancelClick: () -> Unit
+    onCancelClick: () -> Unit,
+    isDarkTheme: Boolean = true,
+    onToggleTheme: () -> Unit = {}
 ) {
-    var selectedRoles by remember { mutableStateOf(setOf("JUGADOR")) }
+    var selectedRoles by remember(initialRoles) { mutableStateOf(initialRoles.ifEmpty { setOf("JUGADOR") }) }
 
     val roles = listOf(
         "JUGADOR" to Color(0xFFFF6600),
@@ -34,7 +37,7 @@ fun RoleSelectionScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0D0F12))
+            .background(MaterialTheme.colorScheme.background)
             .padding(24.dp)
     ) {
         Column(
@@ -45,35 +48,60 @@ fun RoleSelectionScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.Start
         ) {
-            // Logo / Title
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Sport",
-                    color = Color(0xFFFF6600),
-                    fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "Pro",
-                    color = Color.White,
-                    fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
-                )
+            // Header with Logo & Theme Toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Sport",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 36.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Pro",
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontSize = 36.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Surface(
+                    onClick = onToggleTheme,
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isDarkTheme) "🌙 MODO OSCURO" else "☀️ MODO CLARO",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
 
             Text(
                 text = "ELIGE TU ROL",
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "Último paso para completar tu cuenta",
-                color = Color.Gray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 14.sp
             )
 
@@ -83,8 +111,8 @@ fun RoleSelectionScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF161920), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color(0xFF2A2E35), RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
                     .padding(16.dp)
             ) {
                 Column {
@@ -93,7 +121,7 @@ fun RoleSelectionScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Datos recibidos de Google",
-                            color = Color.Gray,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp
                         )
                     }
@@ -102,16 +130,16 @@ fun RoleSelectionScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(text = "Nombre", color = Color.Gray, fontSize = 13.sp)
-                        Text(text = userName, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(text = "Nombre", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        Text(text = userName, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(text = "Correo", color = Color.Gray, fontSize = 13.sp)
-                        Text(text = userEmail, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(text = "Correo", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        Text(text = userEmail, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -120,7 +148,7 @@ fun RoleSelectionScreen(
 
             Text(
                 text = "¿CUÁL ES TU ROL EN LA PLATAFORMA?",
-                color = Color.Gray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.sp
@@ -147,14 +175,14 @@ fun RoleSelectionScreen(
                             .fillMaxWidth()
                             .height(50.dp),
                         shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(if (isSelected) 2.dp else 1.dp, if (isSelected) roleColor else Color(0xFF2A2E35)),
+                        border = BorderStroke(if (isSelected) 2.dp else 1.dp, if (isSelected) roleColor else MaterialTheme.colorScheme.surfaceVariant),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = if (isSelected) roleColor.copy(alpha = 0.15f) else Color(0xFF161920)
+                            containerColor = if (isSelected) roleColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface
                         )
                     ) {
                         Text(
                             text = roleName,
-                            color = if (isSelected) roleColor else Color.White,
+                            color = if (isSelected) roleColor else MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp
                         )
@@ -165,8 +193,8 @@ fun RoleSelectionScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "Puedes seleccionar más de uno. Podrás cambiar tu rol activo dentro de la app.",
-                color = Color.Gray,
+                text = "Puedes seleccionar más de uno. Estos roles describen tu perfil; no te dan control sobre equipos de otras personas.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp
             )
 
@@ -179,7 +207,7 @@ fun RoleSelectionScreen(
                     .fillMaxWidth()
                     .height(50.dp),
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600)),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 enabled = !isLoading
             ) {
                 if (isLoading) {
@@ -199,7 +227,7 @@ fun RoleSelectionScreen(
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
                     text = "Cancelar y volver al inicio de sesión",
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp,
                     modifier = Modifier.clickable(enabled = !isLoading) { onCancelClick() }
                 )
