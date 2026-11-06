@@ -332,7 +332,9 @@ fun SportProNavGraph(
                 HomeScreenContent(
                     userEmail = userEmail,
                     onLogout = onLogout,
-                    isLoading = isLoading
+                    isLoading = isLoading,
+                    canManageCatalog = RoleAccess.can(roles, RoleCapability.MANAGE_EVENT_CATALOG, coachApproved),
+                    onOpenCatalog = { navController.navigate(SportProRoute.EventCatalog.route) }
                 )
             }
 
@@ -533,7 +535,9 @@ fun SportProNavGraph(
 private fun HomeScreenContent(
     userEmail: String,
     onLogout: () -> Unit,
-    isLoading: Boolean
+    isLoading: Boolean,
+    canManageCatalog: Boolean,
+    onOpenCatalog: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -586,7 +590,21 @@ private fun HomeScreenContent(
                     fontSize = 14.sp
                 )
 
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(24.dp))
+
+                if (canManageCatalog) {
+                    Button(
+                        onClick = onOpenCatalog,
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text("CATÁLOGO DE EVENTOS", color = Color.White, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text("→", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
 
                 Button(
                     onClick = onLogout,
