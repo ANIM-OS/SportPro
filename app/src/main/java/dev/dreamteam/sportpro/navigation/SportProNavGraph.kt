@@ -62,8 +62,12 @@ import dev.dreamteam.sportpro.ui.events.EventEditScreen
 import dev.dreamteam.sportpro.ui.events.EventHistoryScreen
 import dev.dreamteam.sportpro.ui.events.LiveEventsEntryScreen
 import dev.dreamteam.sportpro.ui.events.RegisterEventScreen
+import dev.dreamteam.sportpro.ui.events.MatchesForUs13Screen
+import dev.dreamteam.sportpro.ui.events.MatchDetailUs13Screen
 import dev.dreamteam.sportpro.ui.teams.TeamsScreen
 import dev.dreamteam.sportpro.ui.teams.CreateTeamScreen
+import dev.dreamteam.sportpro.ui.live.LiveMatchScreen
+import dev.dreamteam.sportpro.ui.statistics.StatisticsScreen
 
 sealed class SportProRoute(
     val route: String,
@@ -117,6 +121,12 @@ sealed class SportProRoute(
         const val ARG_TYPE_ID = "typeId"
         fun create(typeId: String? = null) =
             if (typeId == null) "event_catalog_edit" else "event_catalog_edit?typeId=$typeId"
+    }
+
+    data object Matches : SportProRoute("matches_us13", "Partidos")
+    data object MatchDetail : SportProRoute("match_us13/{matchId}", "Detalle del partido") {
+        const val ARG_MATCH_ID = "matchId"
+        fun create(matchId: String) = "match_us13/$matchId"
     }
 
     // ── US-13 · Registro dinámico de eventos en vivo ──
@@ -334,31 +344,19 @@ fun SportProNavGraph(
                     onLogout = onLogout,
                     isLoading = isLoading,
                     canManageCatalog = RoleAccess.can(roles, RoleCapability.MANAGE_EVENT_CATALOG, coachApproved),
-                    onOpenCatalog = { navController.navigate(SportProRoute.EventCatalog.route) }
+                    onOpenCatalog = { navController.navigate(SportProRoute.EventCatalog.route) },
+                    onOpenMatches = { navController.navigate(SportProRoute.Matches.route) }
                 )
             }
 
+            // Pantalla En vivo original: recibe cero argumentos.
+            // US-13 usa rutas propias de Partidos y Registro de eventos.
             composable(SportProRoute.Live.route) {
-                // TODO(US-15): cuando se integre la pantalla real de En vivo, mover estos
-                // tres callbacks a ella (botón "Catálogo", botón "Registrar evento" y clic en un evento).
-                LiveEventsEntryScreen(
-                    canManageCatalog = RoleAccess.can(roles, RoleCapability.MANAGE_EVENT_CATALOG),
-                    canRegisterEvents = RoleAccess.can(roles, RoleCapability.REGISTER_EVENTS),
-                    onOpenCatalog = { navController.navigate(SportProRoute.EventCatalog.route) },
-                    onRegisterEvent = { matchId ->
-                        navController.navigate(SportProRoute.RegisterEvent.create(matchId))
-                    },
-                    onOpenEvent = { matchId, eventId ->
-                        navController.navigate(SportProRoute.EventDetail.create(matchId, eventId))
-                    }
-                )
+                LiveMatchScreen()
             }
 
             composable(SportProRoute.Statistics.route) {
-                PlaceholderScreen(
-                    title = "ESTADÍSTICAS",
-                    subtitle = "US-16 · Rendimiento acumulado"
-                )
+                StatisticsScreen()
             }
 
             composable(SportProRoute.Community.route) {
@@ -444,6 +442,25 @@ fun SportProNavGraph(
                         onBack = { navController.popBackStack() }
                     )
                 }
+            }
+
+            composable(SportProRoute.Matches.route) {
+                MatchesForUs13Screen(
+                    onBack = { navController.popBackStack() },
+                    onOpenMatch = { navController.navigate(SportProRoute.MatchDetail.create(it)) }
+                )
+            }
+            composable(
+                SportProRoute.MatchDetail.route,
+                arguments = listOf(navArgument(SportProRoute.MatchDetail.ARG_MATCH_ID) { type = NavType.StringType })
+            ) { entry ->
+                val matchId = entry.arguments?.getString(SportProRoute.MatchDetail.ARG_MATCH_ID).orEmpty()
+                MatchDetailUs13Screen(
+                    matchId = matchId,
+                    canRegister = RoleAccess.can(roles, RoleCapability.REGISTER_EVENTS, coachApproved),
+                    onBack = { navController.popBackStack() },
+                    onRegister = { navController.navigate(SportProRoute.RegisterEvent.create(matchId)) }
+                )
             }
 
             // ───────── US-13 · Registro de eventos en vivo ─────────
@@ -537,7 +554,8 @@ private fun HomeScreenContent(
     onLogout: () -> Unit,
     isLoading: Boolean,
     canManageCatalog: Boolean,
-    onOpenCatalog: () -> Unit
+    onOpenCatalog: () -> Unit,
+    onOpenMatches: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -591,6 +609,18 @@ private fun HomeScreenContent(
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
+
+                Button(
+                    onClick = onOpenMatches,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Text("PARTIDOS", color = Color.White, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text("→", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+                Spacer(modifier = Modifier.height(12.dp))
 
                 if (canManageCatalog) {
                     Button(

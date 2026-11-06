@@ -11,8 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -20,7 +18,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -185,7 +182,11 @@ fun EventCatalogScreen(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 20.dp)
         ) {
             item { Text("TIPOS BASE (${base.size})", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-            items(base, key = { it.id }) { type ->
+            items(
+                count = base.size,
+                key = { index -> base[index].id }
+            ) { index ->
+                val type = base[index]
                 CatalogTypeCard(type = type, onEdit = { onEditType(type.id) }, onToggle = { checked ->
                     try {
                         repository.setActive(type.id, checked)
@@ -198,7 +199,11 @@ fun EventCatalogScreen(
                 Spacer(Modifier.height(8.dp))
                 Text("PERSONALIZADOS (${custom.size})", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
-            items(custom, key = { it.id }) { type ->
+            items(
+                count = custom.size,
+                key = { index -> custom[index].id }
+            ) { index ->
+                val type = custom[index]
                 CatalogTypeCard(type = type, onEdit = { onEditType(type.id) }, onToggle = { checked ->
                     try {
                         repository.setActive(type.id, checked)
@@ -341,20 +346,11 @@ fun EventCatalogEditScreen(typeId: String?, onBack: () -> Unit) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
-// US-13 · Registro dinámico de eventos en vivo
-// ─────────────────────────────────────────────────────────────
+// US-13 está implementada en RegisterLiveEventUs13Screen.kt; se mantiene
+// el wrapper para preservar la navegación existente.
 @Composable
 fun RegisterEventScreen(matchId: String, onBack: () -> Unit, onSaved: () -> Unit) {
-    // TODO(US-13): tipos activos del catálogo, formulario (minuto, equipo, jugador, observaciones),
-    // guardar autor + fecha de registro, y cola offline que sincroniza al recuperar conexión.
-    EventScreenShell(
-        title = "REGISTRAR EVENTO",
-        subtitle = "US-13 · Partido: $matchId",
-        onBack = onBack
-    ) {
-        Button(onClick = onSaved, modifier = Modifier.fillMaxWidth()) { Text("Guardar evento") }
-    }
+    RegisterLiveEventUs13Screen(matchId, onBack, onSaved)
 }
 
 // ─────────────────────────────────────────────────────────────
