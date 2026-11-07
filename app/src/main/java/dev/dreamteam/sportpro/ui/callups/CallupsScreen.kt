@@ -21,10 +21,10 @@ import java.text.DateFormat
 import java.util.Calendar
 import java.util.Date
 
-private fun dateLabel(millis: Long) = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(millis))
+internal fun dateLabel(millis: Long) = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(millis))
 
 @Composable
-fun CallupsScreen(canManage: Boolean, onBack: () -> Unit) {
+fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, onBack: () -> Unit) {
     if (!BuildConfig.LOCAL_FIREBASE) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             TextButton(onClick = onBack) { Text("← Volver") }
@@ -32,6 +32,11 @@ fun CallupsScreen(canManage: Boolean, onBack: () -> Unit) {
             Text("Esta función está en pruebas y todavía no está habilitada en la app compartida.")
         }
         BackHandler(onBack = onBack)
+        return
+    }
+    var lineupMatch by remember { mutableStateOf<CallupMatch?>(null) }
+    lineupMatch?.let {
+        dev.dreamteam.sportpro.ui.lineups.MatchLineupScreen(it, canManage && it.ownerId == com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid) { lineupMatch = null }
         return
     }
     val directory = remember { TeamDirectoryRepository() }
@@ -114,6 +119,7 @@ fun CallupsScreen(canManage: Boolean, onBack: () -> Unit) {
             if (match != null) {
                 Text("Rival: ${match.opponent}\nCategoría: ${match.category}\n${dateLabel(match.kickoff.toDate().time)} (hora local)")
                 OutlinedButton(enabled = !busy && !dirty, onClick = { editingMatch = true }) { Text("Editar datos del partido") }
+                OutlinedButton(enabled = !busy && !dirty && !loadingSelection, onClick = { lineupMatch = match }) { Text("Alineación del partido") }
                 val future = match.kickoff.toDate().time > System.currentTimeMillis()
                 if (!future) Text("El partido ya comenzó: la convocatoria es de solo lectura.")
                 if (loadingRoster || loadingSelection) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -133,6 +139,8 @@ fun CallupsScreen(canManage: Boolean, onBack: () -> Unit) {
                     TextButton(enabled = !busy, onClick = { selected = selected.intersect(eligibleIds); dirty = true }) { Text("Retirar selecciones no válidas") }
                 }
                 Text("${selected.size} jugadores seleccionados")
+                Text("Cierre de respuestas: ${dateLabel(match.responseDeadline.toDate().time)}")
+                CoachAvailability(match.id, match.teamId, records, roster)
                 if (dirty) Text("Guarda o descarta los cambios antes de cambiar de equipo o partido.")
                 Button(enabled = dirty && !busy && !loadingRoster && !loadingSelection && invalid.isEmpty() && future && team != null,
                     onClick = {
@@ -150,7 +158,8 @@ fun CallupsScreen(canManage: Boolean, onBack: () -> Unit) {
             message?.let { Text(it) }
             HorizontalDivider()
         }
-        MyCallups(repository)
+        MyCallups(repository) { lineupMatch = it }
+        if (isGuardian) GuardianCallups(repository)
     }
 }
 
@@ -171,6 +180,7 @@ private fun MatchEditor(team: Team, existing: CallupMatch?, repository: CallupRe
     var category by remember { mutableStateOf(existing?.category ?: "") }
     var opponent by remember { mutableStateOf(existing?.opponent ?: "") }
     var kickoff by remember { mutableStateOf(existing?.kickoff?.toDate()?.time ?: 0L) }
+    var deadline by remember { mutableStateOf(existing?.responseDeadline?.toDate()?.time ?: 0L) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(onDismissRequest = { if (!busy) onDismiss() },
@@ -187,15 +197,27 @@ private fun MatchEditor(team: Team, existing: CallupMatch?, repository: CallupRe
                         TimePickerDialog(context, { _, hour, minute ->
                             calendar.set(year, month, day, hour, minute, 0); calendar.set(Calendar.MILLISECOND, 0)
                             kickoff = calendar.timeInMillis
+                            if (deadline == 0L) deadline = kickoff
                         }, calendar.get(Calendar.HOUR_OF_DAY), calendar.get(Calendar.MINUTE), true).show()
                     }, calendar.get(Calendar.YEAR), calendar.get(Calendar.MONTH), calendar.get(Calendar.DAY_OF_MONTH)).show()
                 }) { Text(if (kickoff == 0L) "Elegir fecha y hora" else dateLabel(kickoff)) }
+                Text("Cierre para responder disponibilidad")
+                OutlinedButton(enabled = !busy, onClick = {
+                    val calendar = Calendar.getInstance().apply { if (deadline > 0) timeInMillis = deadline }
+                    DatePickerDialog(context, { _, year, month, day ->
+                        TimePickerDialog(context, { _, hour, minute ->
+                            calendar.set(year, month, day, hour, minute, 0); calendar.set(Calendar.MILLISECOND, 0)
+                            deadline = calendar.timeInMillis
+                        }, calendar.get(Calendar.HOUR_OF_DAY), calendar.get(Calendar.MINUTE), true).show()
+                    }, calendar.get(Calendar.YEAR), calendar.get(Calendar.MONTH), calendar.get(Calendar.DAY_OF_MONTH)).show()
+                }) { Text(if (deadline == 0L) "Elegir cierre" else dateLabel(deadline)) }
+                Text("El cierre debe ser futuro y no posterior al inicio del partido.")
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
-        confirmButton = { TextButton(enabled = !busy && category in team.categories && opponent.isNotBlank() && kickoff > System.currentTimeMillis(), onClick = {
+        confirmButton = { TextButton(enabled = !busy && category in team.categories && opponent.isNotBlank() && kickoff > System.currentTimeMillis() && deadline > System.currentTimeMillis() && deadline <= kickoff, onClick = {
             busy = true
-            repository.saveMatch(existing, team.id, category, opponent, kickoff)
+            repository.saveMatch(existing, team.id, category, opponent, kickoff, deadline)
                 .addOnSuccessListener { onSaved() }
                 .addOnFailureListener { error = it.localizedMessage; busy = false }
         }) { Text(if (busy) "Guardando…" else "Guardar partido") } },
@@ -203,7 +225,7 @@ private fun MatchEditor(team: Team, existing: CallupMatch?, repository: CallupRe
 }
 
 @Composable
-private fun MyCallups(repository: CallupRepository) {
+private fun MyCallups(repository: CallupRepository, onOpenLineup: (CallupMatch) -> Unit) {
     var rows by remember { mutableStateOf<List<PlayerCallup>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -215,11 +237,11 @@ private fun MyCallups(repository: CallupRepository) {
     if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     if (!loading && rows.isEmpty() && error == null) Text("Todavía no tienes convocatorias.")
-    rows.forEach { row -> key(row.id) { PlayerMatchCard(row, repository) } }
+    rows.forEach { row -> key(row.id) { PlayerMatchCard(row, repository, onOpenLineup) } }
 }
 
 @Composable
-private fun PlayerMatchCard(row: PlayerCallup, repository: CallupRepository) {
+private fun PlayerMatchCard(row: PlayerCallup, repository: CallupRepository, onOpenLineup: (CallupMatch) -> Unit) {
     var match by remember { mutableStateOf<CallupMatch?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     DisposableEffect(row.matchId) {
@@ -231,6 +253,8 @@ private fun PlayerMatchCard(row: PlayerCallup, repository: CallupRepository) {
             Text(if (!row.selected) "Convocatoria retirada" else if (match != null) "Estás convocado" else "Convocatoria pendiente de comprobar")
             match?.let { Text("vs ${it.opponent}\n${it.category}\n${dateLabel(it.kickoff.toDate().time)} (hora local)") }
                 ?: Text(error ?: "El encuentro no está disponible")
+            AvailabilityActions(row, match)
+            match?.let { current -> OutlinedButton(onClick = { onOpenLineup(current) }) { Text("Ver alineación del partido") } }
         }
     }
 }

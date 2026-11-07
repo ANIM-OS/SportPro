@@ -8,10 +8,16 @@ async function request(url, body, token = 'owner', method = 'POST') {
   const response = await fetch(url, {method, headers: {'Content-Type':'application/json', ...(token ? {Authorization:`Bearer ${token}`} : {})}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
   return {status:response.status, body:await response.json()};
 }
-function fields(data) {
-  return Object.fromEntries(Object.entries(data).map(([k,v]) => [k,
-    v instanceof Date ? {timestampValue:v.toISOString()} : Array.isArray(v) ? {arrayValue:{values:v.map(stringValue => ({stringValue}))}} : typeof v === 'boolean' ? {booleanValue:v} : {stringValue:v}]));
+function value(v) {
+  if (v instanceof Date) return {timestampValue:v.toISOString()};
+  if (Array.isArray(v)) return {arrayValue:{values:v.map(value)}};
+  if (v === null) return {nullValue:null};
+  if (typeof v === 'boolean') return {booleanValue:v};
+  if (typeof v === 'number') return {integerValue:String(v)};
+  if (typeof v === 'object') return {mapValue:{fields:fields(v)}};
+  return {stringValue:v};
 }
+function fields(data) { return Object.fromEntries(Object.entries(data).map(([k,v]) => [k,value(v)])); }
 async function set(path, data, token='owner', timestamp=false) {
   return request(`${root}:commit`, {writes:[{update:{name:`projects/${project}/databases/(default)/documents/${path}`, fields:fields(data)}, ...(timestamp ? {updateTransforms:[{fieldPath:'updatedAt',setToServerValue:'REQUEST_TIME'}]} : {})}]}, token);
 }
@@ -22,6 +28,14 @@ async function account(email) {
   assert.ok(r.body.idToken, "Missing user token: never run authorization tests as admin");
   return {id:r.body.localId, token:r.body.idToken};
 }
+// Clean only the deterministic test lineups so repeated runs can withdraw test callups.
+for (const matchId of ['local-match','lineup-other']) {
+  for (const child of ['players','slots']) {
+    const result = await request(`${root}/matchLineups/${matchId}/${child}`,undefined,'owner','GET');
+    for (const doc of result.body.documents ?? []) await request(`http://127.0.0.1:8080/v1/${doc.name}`,undefined,'owner','DELETE');
+  }
+  await request(`${root}/matchLineups/${matchId}`,undefined,'owner','DELETE');
+}
 const coach=await account('entrenador@sportpro.test');
 const player=await account('jugador@sportpro.test');
 const other=await account('otro@sportpro.test');
@@ -29,6 +43,7 @@ const wrongCategory=await account('otra.categoria@sportpro.test');
 for (const [u,role,email] of [[coach,'ENTRENADOR','entrenador@sportpro.test'],[player,'JUGADOR','jugador@sportpro.test'],[other,'JUGADOR','otro@sportpro.test'],[wrongCategory,'JUGADOR','otra.categoria@sportpro.test']]) {
   assert.equal((await set(`users/${u.id}`,{email,roles:[role],profileComplete:true})).status,200);
 }
+await set(`coachApprovals/${coach.id}`,{approved:true});
 await set('teams/local-team',{name:'Equipo de prueba Brayan',type:'EQUIPO',createdBy:coach.id,categories:['SUB-17','SUB-15']});
 await set(`teamMemberships/local-team_${player.id}`,{teamId:'local-team',userId:player.id,playerName:'Jugador de prueba',category:'SUB-17'});
 await set(`teamMemberships/local-team_${wrongCategory.id}`,{teamId:'local-team',userId:wrongCategory.id,playerName:'Jugador Sub-15',category:'SUB-15'});
@@ -76,3 +91,5 @@ await set('matchFixtures/local-match',{...fixture,opponent:'Rival actualizado'},
 expect(await set(`matchCallupPlayers/local-match_${player.id}`,selection(player),coach.token,true),200,'restore local demonstration');
 console.log('\nLocal accounts: entrenador@sportpro.test / jugador@sportpro.test');
 console.log('Local password: '+password);
+
+export {project, root, auth, password, request, fields, set, account, coach, player, other, wrongCategory, fixture, selection, expect, query};

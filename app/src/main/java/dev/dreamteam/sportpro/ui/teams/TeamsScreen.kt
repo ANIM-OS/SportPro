@@ -45,13 +45,14 @@ fun TeamsScreen(
     onCreateTeamClick: () -> Unit,
     canCreateTeam: Boolean,
     canJoinWithCode: Boolean,
+    canRespondAsGuardian: Boolean = false,
     newlyCreatedTeamId: String? = null,
     onNewTeamOpened: () -> Unit = {},
     viewModel: TeamsViewModel = viewModel()
 ) {
     var showCallupDraft by remember { mutableStateOf(false) }
-    if (showCallupDraft && (canCreateTeam || canJoinWithCode)) {
-        dev.dreamteam.sportpro.ui.callups.CallupsScreen(canManage = canCreateTeam, onBack = { showCallupDraft = false })
+    if (showCallupDraft && (canCreateTeam || canJoinWithCode || canRespondAsGuardian)) {
+        dev.dreamteam.sportpro.ui.callups.CallupsScreen(canManage = canCreateTeam, isGuardian = canRespondAsGuardian, onBack = { showCallupDraft = false })
         return
     }
     val uiState by viewModel.uiState.collectAsState()
@@ -202,7 +203,7 @@ fun TeamsScreen(
             .background(MaterialTheme.colorScheme.background)
             .padding(16.dp)
     ) {
-        if (canCreateTeam || canJoinWithCode) {
+        if (canCreateTeam || canJoinWithCode || canRespondAsGuardian) {
             OutlinedButton(onClick = { showCallupDraft = true }) { Text("Convocatorias") }
         }
         // Top Header

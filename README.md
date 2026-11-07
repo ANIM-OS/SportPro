@@ -133,3 +133,48 @@ Los borradores antiguos del dispositivo no se migran ni se eliminan.
 Las reglas nuevas están añadidas solo a las colecciones de US-09. Antes de un despliegue real,
 se deben reconciliar con las reglas actualmente publicadas y acordar con el equipo la fuente
 común de partidos. Las pantallas de demostración de otras historias no se modifican aquí.
+
+
+## US-11: alineación por partido (variante local)
+
+Depende de las convocatorias de US-09. US-10 aporta el estado de disponibilidad como
+referencia: no responder no excluye al jugador y no se impide al entrenador alinear
+un convocado que marcó «No disponible», porque esa restricción no forma parte de US-11.
+Las pruebas locales cubren las respuestas del jugador y del tutor verificado y vinculado,
+la revocación del vínculo, el cierre del plazo y la consulta del entrenador.
+
+En **Equipos → Convocatorias**, selecciona un equipo y un partido y abre **Alineación del
+partido**. Guarda o descarta primero cualquier cambio pendiente en la convocatoria.
+Toca una casilla para elegir un titular; usa **Agregar suplente** para el banco. Cada
+jugador tiene una sola asignación y se puede mover entre titular y suplente mediante
+**Editar**. **Guardar asignación** persiste el cambio inmediatamente; **Retirar** libera
+su lugar. Una posición ocupada debe liberarse antes de colocar otro jugador.
+La disponibilidad aparece junto a los nombres. Las alineaciones incompletas se pueden
+preparar y guardar; no se exige tener once titulares desde el primer guardado.
+
+La cancha y las formaciones se comparten con la alineación general del equipo. Cambiar
+la formación de un partido conserva las casillas asignadas y pide confirmar que se
+adaptarán sus posiciones; no modifica la alineación general ni otro encuentro.
+Los jugadores del equipo pueden consultar la alineación desde su convocatoria.
+Solo el propietario aprobado puede editarla, y solamente antes del inicio del partido.
+
+La colección nueva es `matchLineups`, con un documento por partido y subcolecciones
+`players` (una asignación por jugador) y `slots` (reserva exclusiva de cada casilla titular).
+Los cambios de posición y condición se guardan en transacciones; las reglas exigen
+convocatoria activa, categoría correcta, propiedad, aprobación y ausencia de duplicados.
+Retirar a un jugador de la convocatoria también retira su asignación en la misma
+transacción. Si cambia su categoría o membresía desde otro módulo, la pantalla avisa
+que su asignación ya no es válida y permite retirarla; no altera ese otro módulo.
+
+`tests/callups/lineup-check.mjs` ejecuta las pruebas encadenadas de US-09, US-10 y US-11,
+incluidas dos alineaciones independientes, once titulares y un suplente, escrituras
+simultáneas y conservación de la alineación general. El script de preparación local
+ahora ejecuta esta suite y deja ese ejemplo listo. Cuenta adicional para US-10:
+`tutor@sportpro.test`, con la misma contraseña local y vínculo verificado al jugador.
+Los registros que prepara y reinicia la suite son exclusivamente de `demo-sportpro`.
+
+No se han desplegado estas reglas al proyecto compartido. Las funciones de US-09 a
+US-11 continúan deshabilitadas en las variantes normales hasta revisar las reglas
+publicadas y autorizar su puesta en marcha. No ejecutar `firebase deploy` como parte
+de estas pruebas. Los scripts locales conservan los datos al cerrar limpiamente
+los emuladores; la suite vuelve a preparar sus registros de prueba al ejecutarse.

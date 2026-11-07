@@ -7,6 +7,6 @@ fi
 adb_bin="$HOME/Library/Android/sdk/platform-tools/adb"
 "$adb_bin" reverse tcp:9099 tcp:9099
 "$adb_bin" reverse tcp:8080 tcp:8080
-node tests/callups/emulator-check.mjs
+node tests/callups/lineup-check.mjs
 printf '\nListo. Selecciona la variante local en Android Studio y pulsa Run.\n'
 read -r 'reply?Pulsa Enter para cerrar.'
