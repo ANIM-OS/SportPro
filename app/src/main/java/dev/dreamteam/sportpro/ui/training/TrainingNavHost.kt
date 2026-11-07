@@ -25,6 +25,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.google.firebase.auth.FirebaseAuth
+import dev.dreamteam.sportpro.domain.access.COACH_PENDING_MESSAGE
 import dev.dreamteam.sportpro.ui.auth.AppRole
 import dev.dreamteam.sportpro.ui.players.MonthlyFeesScreen
 import dev.dreamteam.sportpro.ui.players.PlayerFeesScreen
@@ -55,13 +56,15 @@ private object TrainingRoutes {
 
 /**
  * Pestaña "Entrenar": US-04 (perfil del jugador), US-05 (mensualidades), US-06 (sesiones),
- * US-07 (biblioteca de ejercicios) y US-08 (asistencia). Cada rol ve solo sus módulos.
+ * US-07 (biblioteca de ejercicios) y US-08 (asistencia). Cada rol ve solo sus módulos;
+ * los módulos de entrenador exigen la aprobación del rol, igual que las reglas de Firestore.
  */
 @Composable
-fun TrainingNavHost(roles: Set<AppRole>) {
+fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
     val navController = rememberNavController()
     val uid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
-    val isCoach = AppRole.COACH in roles
+    val isCoach = AppRole.COACH in roles && isCoachApproved
+    val coachPending = AppRole.COACH in roles && !isCoachApproved
     val isPlayer = AppRole.PLAYER in roles
     val isParent = AppRole.PARENT in roles
 
@@ -72,6 +75,7 @@ fun TrainingNavHost(roles: Set<AppRole>) {
         composable(TrainingRoutes.HUB) {
             TrainingHub(
                 isCoach = isCoach,
+                coachPending = coachPending,
                 isPlayer = isPlayer,
                 isParent = isParent,
                 onNavigate = { route -> navController.navigate(route) },
@@ -172,6 +176,7 @@ private data class OwnPlayerRoutes(val profile: String, val attendance: String, 
 @Composable
 private fun TrainingHub(
     isCoach: Boolean,
+    coachPending: Boolean,
     isPlayer: Boolean,
     isParent: Boolean,
     onNavigate: (String) -> Unit,
@@ -196,7 +201,9 @@ private fun TrainingHub(
             fontSize = 14.sp
         )
 
-        if (!isCoach && !isPlayer && !isParent) {
+        if (coachPending) {
+            EmptyState(COACH_PENDING_MESSAGE)
+        } else if (!isCoach && !isPlayer && !isParent) {
             EmptyState("Tu cuenta aún no tiene roles asignados. Elígelos con el botón \"Roles\" de la barra superior.")
         }
 

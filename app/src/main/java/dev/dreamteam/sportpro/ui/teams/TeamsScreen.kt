@@ -45,7 +45,6 @@ fun TeamsScreen(
     onCreateTeamClick: () -> Unit,
     canCreateTeam: Boolean,
     canJoinWithCode: Boolean,
-    coachNeedsApproval: Boolean = false,
     newlyCreatedTeamId: String? = null,
     onNewTeamOpened: () -> Unit = {},
     viewModel: TeamsViewModel = viewModel()
@@ -184,6 +183,7 @@ fun TeamsScreen(
 
     if (selectedTeam != null) {
         TeamManagementScreen(selectedTeam, uiState.currentUserId, viewModel,
+            canUseCoachTools = canCreateTeam,
             onBack = {
                 selectedTeamId = returnToTeamId
                 returnToTeamId = null
@@ -248,12 +248,6 @@ fun TeamsScreen(
             Spacer(modifier = Modifier.height(12.dp))
         }
 
-        if (coachNeedsApproval) {
-            Text("Para crear equipos, la administración debe aprobar tu perfil de entrenador.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-
         uiState.invitesError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         uiState.managementError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (editingTeam == null) uiState.teamActionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -303,7 +297,8 @@ fun TeamsScreen(
                 items(uiState.teams, key = { "team_${it.id}" }) { team ->
                     TeamCard(
                         team = team,
-                        canInvite = TeamAccess.canManage(team, uiState.currentUserId),
+                        canManage = TeamAccess.canManage(team, uiState.currentUserId),
+                        canInvite = canCreateTeam && TeamAccess.canManage(team, uiState.currentUserId),
                         onInvite = {
                             viewModel.clearInviteError()
                             invitedEmail = ""
@@ -398,6 +393,7 @@ fun TeamsScreen(
 @Composable
 fun TeamCard(
     team: Team,
+    canManage: Boolean,
     canInvite: Boolean,
     onInvite: () -> Unit,
     onEdit: () -> Unit,
@@ -429,7 +425,7 @@ fun TeamCard(
                 verticalAlignment = Alignment.Top
             ) {
                 // Left side: Square Crest / Logo
-                TeamPhoto(team, onPhoto, canInvite && !isUploadingPhoto && !isDeleting)
+                TeamPhoto(team, onPhoto, canManage && !isUploadingPhoto && !isDeleting)
 
                 // Right side: Name, Type, City, Description
                 Column(
@@ -515,12 +511,14 @@ fun TeamCard(
                 Text("Plantilla y alineación", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
             }
 
-            if (canInvite) {
+            if (canManage) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    TextButton(onClick = onInvite, contentPadding = PaddingValues(0.dp)) { Text("Invitar", fontSize = 12.sp) }
+                    if (canInvite) {
+                        TextButton(onClick = onInvite, contentPadding = PaddingValues(0.dp)) { Text("Invitar", fontSize = 12.sp) }
+                    }
                     TextButton(onClick = onPhoto, enabled = !isUploadingPhoto && !isDeleting, contentPadding = PaddingValues(0.dp)) {
                         Text(if (isUploadingPhoto) "Subiendo…" else "Cambiar foto", fontSize = 12.sp)
                     }

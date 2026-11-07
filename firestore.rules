@@ -3,6 +3,19 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // El rol ENTRENADOR lo elige el usuario; la aprobación solo se crea desde la consola.
+    function isApprovedCoach() {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+        && exists(/databases/$(database)/documents/coachApprovals/$(request.auth.uid))
+        && get(/databases/$(database)/documents/coachApprovals/$(request.auth.uid)).data.approved == true;
+    }
+
     // US-09. New collections only; existing team and community rules stay intact.
     function callupOwnsTeam(teamId) {
       return request.auth != null
@@ -75,7 +88,10 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'email',
           'roles',
-          'profileComplete'
+          'profileComplete',
+          'firstName',
+          'lastName',
+          'createdAt'
         ])
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.profileComplete == true
@@ -85,7 +101,19 @@ service cloud.firestore {
           'JUGADOR',
           'ENTRENADOR',
           'PADRE / TUTOR'
-        ]);
+        ])
+        && (!request.resource.data.keys().hasAny(['firstName'])
+          || (request.resource.data.firstName is string
+            && request.resource.data.firstName.size() > 0
+            && request.resource.data.firstName.size() <= 100))
+        && (!request.resource.data.keys().hasAny(['lastName'])
+          || (request.resource.data.lastName is string
+            && request.resource.data.lastName.size() > 0
+            && request.resource.data.lastName.size() <= 100))
+        && (resource == null
+          ? (!request.resource.data.keys().hasAny(['createdAt'])
+            || request.resource.data.createdAt == request.time)
+          : request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null));
 
       allow delete: if false;
     }
@@ -143,6 +171,9 @@ service cloud.firestore {
           /databases/$(database)/documents/users/$(request.auth.uid)
         ).data.roles
 
+        // Publicar como entrenador exige aprobación
+        && (request.resource.data.authorRole != 'ENTRENADOR' || isApprovedCoach())
+
         // Validación del contenido
         && request.resource.data.content is string
         && request.resource.data.content.size() > 0
@@ -162,9 +193,9 @@ service cloud.firestore {
         && request.resource.data.active == true
         && request.resource.data.moderated == false;
 
-      // Un moderador designado puede ocultar una publicación sin alterar su contenido.
+      // Un moderador designado o un administrador puede ocultar una publicación sin alterar su contenido.
       allow update: if request.auth != null
-        && exists(/databases/$(database)/documents/moderators/$(request.auth.uid))
+        && (exists(/databases/$(database)/documents/moderators/$(request.auth.uid)) || isAdmin())
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderated'])
         && resource.data.moderated == false
         && request.resource.data.moderated == true;
@@ -174,6 +205,80 @@ service cloud.firestore {
     match /moderators/{moderatorId} {
       allow get: if request.auth != null && request.auth.uid == moderatorId;
       allow list, write: if false;
+    }
+
+    // =========================
+    // ADMINISTRADORES Y APROBACIÓN DE ENTRENADORES (se gestionan desde la consola)
+    // =========================
+    match /admins/{adminId} {
+      allow get: if request.auth != null && request.auth.uid == adminId;
+      allow list, write: if false;
+    }
+
+    match /coachApprovals/{coachId} {
+      allow get: if request.auth != null && request.auth.uid == coachId;
+      allow list, write: if false;
+    }
+
+    // =========================
+    // US-20: AVISOS DE PRUEBAS Y CONVOCATORIAS
+    // Vigente o vencido se calcula en la app con deadline (plan Spark, sin Cloud Functions).
+    // =========================
+    match /tryoutNotices/{noticeId} {
+      allow read: if request.auth != null;
+
+      allow create: if isApprovedCoach()
+        && request.resource.data.keys().hasAll([
+          'authorId', 'authorName', 'title', 'description', 'status', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'authorId', 'authorName', 'title', 'description', 'category', 'position',
+          'tryoutDate', 'location', 'deadline', 'status', 'createdAt'
+        ])
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.authorName is string
+        && request.resource.data.authorName.size() > 0
+        && request.resource.data.authorName.size() <= 100
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 100
+        && request.resource.data.description is string
+        && request.resource.data.description.size() > 0
+        && request.resource.data.description.size() <= 2000
+        // Mismas listas que SportCatalog en la app
+        && (!request.resource.data.keys().hasAny(['category'])
+          || request.resource.data.category in [
+            'SUB-10', 'SUB-12', 'SUB-15', 'SUB-17', 'PRIMERA', 'FEMENIL-SUB-15', 'FEMENIL-SUB-17'
+          ])
+        && (!request.resource.data.keys().hasAny(['position'])
+          || request.resource.data.position in [
+            'Portero', 'Defensa central', 'Lateral', 'Mediocampista', 'Extremo', 'Delantero'
+          ])
+        && (!request.resource.data.keys().hasAny(['location'])
+          || (request.resource.data.location is string
+            && request.resource.data.location.size() > 0
+            && request.resource.data.location.size() <= 120))
+        && (!request.resource.data.keys().hasAny(['tryoutDate'])
+          || request.resource.data.tryoutDate is timestamp)
+        // No se puede publicar un aviso ya vencido
+        && (!request.resource.data.keys().hasAny(['deadline'])
+          || (request.resource.data.deadline is timestamp
+            && request.resource.data.deadline > request.time))
+        // La app exige fecha límite <= día de la prueba; el margen cubre zonas horarias
+        && (!request.resource.data.keys().hasAll(['deadline', 'tryoutDate'])
+          || request.resource.data.deadline <= request.resource.data.tryoutDate + duration.value(2, 'd'))
+        && request.resource.data.status == 'ACTIVE'
+        && request.resource.data.createdAt == request.time;
+
+      // Solo se puede cancelar: lo hace el autor (aunque ya no esté aprobado) o un administrador.
+      allow update: if request.auth != null
+        && (resource.data.authorId == request.auth.uid || isAdmin())
+        && resource.data.status == 'ACTIVE'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt'])
+        && request.resource.data.status == 'CANCELLED'
+        && request.resource.data.cancelledAt == request.time;
+
+      allow delete: if false;
     }
 
     // =========================
@@ -190,8 +295,7 @@ service cloud.firestore {
         || exists(/databases/$(database)/documents/teamMemberships/$(teamId + '_' + request.auth.uid))
       );
 
-      allow create: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+      allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
           'createdBy', 'name', 'type', 'categories', 'playerCount', 'createdAt',
           'city', 'description', 'primaryColor', 'secondaryColor', 'foundedYear',
@@ -256,8 +360,7 @@ service cloud.firestore {
         || get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
       );
 
-      allow create: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+      allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
           'teamId', 'teamName', 'invitedEmail', 'invitedBy', 'status', 'createdAt'
         ])
@@ -353,8 +456,7 @@ service cloud.firestore {
       );
       allow list: if request.auth != null
         && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid;
-      allow create: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+      allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly(['teamId', 'teamName', 'categories', 'createdBy', 'createdAt', 'expiresAt'])
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.teamId is string
@@ -396,7 +498,7 @@ service cloud.firestore {
           ])
           && request.resource.data.updatedAt == request.time;
       }
-      allow create, update: if request.auth != null
+      allow create, update: if isApprovedCoach()
         && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.createdBy == request.auth.uid
         && validLineup();
       allow delete: if request.auth != null
@@ -411,18 +513,26 @@ service cloud.firestore {
 
       allow read: if request.auth != null && (
         request.auth.uid == playerId
-        || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+        || isApprovedCoach()
         // US-04: el padre o tutor vinculado y verificado puede consultar el perfil.
         || isVerifiedGuardianOf(playerId)
       );
+
+      // US-04: miniatura de la foto guardada en el documento (plan Spark, sin Cloud Storage).
+      function validPlayerPhoto() {
+        return !request.resource.data.keys().hasAny(['photoBase64'])
+          || (request.resource.data.photoBase64 is string
+            && request.resource.data.photoBase64.size() <= 800000);
+      }
+
       allow create: if request.auth != null && (
         request.auth.uid == playerId
-        || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
-      );
+        || isApprovedCoach()
+      ) && validPlayerPhoto();
       allow update: if request.auth != null && (
         request.auth.uid == playerId
-        || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
-      );
+        || isApprovedCoach()
+      ) && validPlayerPhoto();
 
       allow delete: if false;
     }
@@ -431,11 +541,6 @@ service cloud.firestore {
     // =========================
     // US-04 a US-08: ENTRENAMIENTOS Y JUGADORES
     // =========================
-
-    function isCoach() {
-      return request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR']);
-    }
 
     function ownsTeam(teamId) {
       return get(/databases/$(database)/documents/teams/$(teamId)).data.createdBy == request.auth.uid;
@@ -486,7 +591,7 @@ service cloud.firestore {
       }
 
       allow read: if request.auth != null && resource.data.createdBy == request.auth.uid;
-      allow create: if isCoach()
+      allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly(['createdBy', 'name', 'description', 'durationMinutes', 'createdAt', 'updatedAt'])
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time
@@ -527,7 +632,7 @@ service cloud.firestore {
         resource.data.createdBy == request.auth.uid
         || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))
       );
-      allow create: if request.auth != null
+      allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
           'teamId', 'teamName', 'category', 'createdBy', 'date', 'durationMinutes',
           'objectives', 'exercises', 'createdAt', 'updatedAt'
@@ -538,7 +643,7 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time
         && validSession();
       // Solo se modifica o elimina antes de su realización.
-      allow update: if request.auth != null
+      allow update: if isApprovedCoach()
         && resource.data.createdBy == request.auth.uid
         && resource.data.date > request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -559,7 +664,7 @@ service cloud.firestore {
         || resource.data.playerId == request.auth.uid
         || isVerifiedGuardianOf(resource.data.playerId)
       );
-      allow create, update: if request.auth != null
+      allow create, update: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
           'sessionId', 'teamId', 'teamName', 'coachId', 'playerId', 'playerName', 'status', 'sessionDate', 'updatedAt'
         ])
@@ -588,7 +693,7 @@ service cloud.firestore {
         || resource.data.playerId == request.auth.uid
         || isVerifiedGuardianOf(resource.data.playerId)
       );
-      allow create: if request.auth != null
+      allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
           'playerId', 'playerName', 'teamId', 'teamName', 'coachId', 'period', 'amount', 'status', 'paidAt', 'updatedAt'
         ])
@@ -604,7 +709,7 @@ service cloud.firestore {
             && request.resource.data.amount >= 0
             && request.resource.data.amount <= 100000))
         && request.resource.data.updatedAt == request.time;
-      allow update: if request.auth != null
+      allow update: if isApprovedCoach()
         && resource.data.coachId == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'paidAt', 'updatedAt'])
         && request.resource.data.status in ['PENDIENTE', 'PAGADA']

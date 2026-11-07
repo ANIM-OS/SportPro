@@ -107,7 +107,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "Inicia sesión para continuar",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 14.sp
             )
 
@@ -223,51 +223,11 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Divider "o continúa con"
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.surfaceVariant)
-                Text(
-                    text = "  o continúa con  ",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 12.sp
-                )
-                HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.surfaceVariant)
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Google Button with official Google Vector Logo
-            OutlinedButton(
+            GoogleSignInSection(
                 onClick = onGoogleLoginClick,
-                enabled = !isLoading,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant),
-                colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                if (isGoogleLoading) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
-                    Spacer(modifier = Modifier.width(12.dp))
-                } else {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_google),
-                        contentDescription = "Google Logo",
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                }
-                Text(
-                    text = if (isGoogleLoading) "Conectando con Google…" else "Continuar con Google",
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 14.sp
-                )
-            }
+                isLoading = isLoading,
+                isGoogleLoading = isGoogleLoading
+            )
 
             Spacer(modifier = Modifier.height(32.dp))
 
@@ -290,5 +250,59 @@ fun LoginScreen(
                 )
             }
         }
+    }
+}
+
+/** "o continúa con" divider and Google button, shared by login and registration. */
+@Composable
+internal fun GoogleSignInSection(
+    onClick: () -> Unit,
+    isLoading: Boolean,
+    isGoogleLoading: Boolean
+) {
+    // Divider "o continúa con"
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.surfaceVariant)
+        Text(
+            text = "  o continúa con  ",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.surfaceVariant)
+    }
+
+    Spacer(modifier = Modifier.height(20.dp))
+
+    // Google Button with official Google Vector Logo
+    OutlinedButton(
+        onClick = onClick,
+        enabled = !isLoading,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(50.dp),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant),
+        colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        if (isGoogleLoading) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+        } else {
+            Image(
+                painter = painterResource(id = R.drawable.ic_google),
+                contentDescription = "Google Logo",
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+        }
+        Text(
+            text = if (isGoogleLoading) "Conectando con Google…" else "Continuar con Google",
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Medium,
+            fontSize = 14.sp
+        )
     }
 }

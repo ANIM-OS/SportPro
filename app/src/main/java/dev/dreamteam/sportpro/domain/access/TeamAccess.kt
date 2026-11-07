@@ -2,6 +2,8 @@ package dev.dreamteam.sportpro.domain.access
 
 import dev.dreamteam.sportpro.data.model.Team
 
+const val COACH_PENDING_MESSAGE = "Tu rol de entrenador está pendiente de aprobación"
+
 /** A profile role never grants authority over a particular team. */
 object TeamAccess {
     fun canManage(team: Team, userId: String?): Boolean =

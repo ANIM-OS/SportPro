@@ -9,11 +9,13 @@ service firebase.storage {
         && request.resource.contentType.matches('image/.*');
     }
 
-    // US-04: foto del jugador. La sube el propio jugador; la ven él, entrenadores y padres o tutores vinculados.
+    // US-04: foto del jugador. La sube el propio jugador; la ven él, entrenadores aprobados y padres o tutores vinculados.
     match /playerProfiles/{playerId}/photo.jpg {
       allow read: if request.auth != null && (
         request.auth.uid == playerId
-        || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+        || (firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+          && firestore.exists(/databases/(default)/documents/coachApprovals/$(request.auth.uid))
+          && firestore.get(/databases/(default)/documents/coachApprovals/$(request.auth.uid)).data.approved == true)
         || (request.auth.token.email_verified == true
           && firestore.exists(/databases/(default)/documents/playerGuardians/$(playerId + '_' + request.auth.token.email.lower())))
       );
