@@ -16,6 +16,65 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/coachApprovals/$(request.auth.uid)).data.approved == true;
     }
 
+    // US-09. New collections only; existing team and community rules stay intact.
+    function callupOwnsTeam(teamId) {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+        && get(/databases/$(database)/documents/teams/$(teamId)).data.createdBy == request.auth.uid;
+    }
+    function callupMember(teamId, playerId, category) {
+      let member = get(/databases/$(database)/documents/teamMemberships/$(teamId + '_' + playerId)).data;
+      return member.teamId == teamId && member.userId == playerId && member.category == category;
+    }
+    match /matchFixtures/{matchId} {
+      allow read: if request.auth != null && (
+        callupOwnsTeam(resource.data.teamId)
+        || callupMember(resource.data.teamId, request.auth.uid, resource.data.category)
+      );
+      function validFixture() {
+        let d = request.resource.data;
+        return d.keys().hasAll(['teamId', 'ownerId', 'category', 'opponent', 'kickoff', 'updatedAt'])
+          && d.keys().hasOnly(['teamId', 'ownerId', 'category', 'opponent', 'kickoff', 'updatedAt'])
+          && d.teamId is string && d.ownerId == request.auth.uid
+          && callupOwnsTeam(d.teamId)
+          && get(/databases/$(database)/documents/teams/$(d.teamId)).data.type == 'EQUIPO'
+          && d.category is string
+          && d.category in get(/databases/$(database)/documents/teams/$(d.teamId)).data.categories
+          && d.opponent is string && d.opponent.size() > 0 && d.opponent.size() <= 100
+          && d.kickoff is timestamp && d.kickoff > request.time
+          && d.updatedAt == request.time;
+      }
+      allow create: if request.auth != null && validFixture();
+      allow update: if request.auth != null && validFixture()
+        && resource.data.kickoff > request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['opponent', 'kickoff', 'updatedAt']);
+      allow delete: if false;
+    }
+    match /matchCallupPlayers/{selectionId} {
+      allow read: if request.auth != null && (
+        resource.data.playerId == request.auth.uid || resource.data.ownerId == request.auth.uid
+      );
+      function validSelection() {
+        let d = request.resource.data;
+        let fixture = get(/databases/$(database)/documents/matchFixtures/$(d.matchId)).data;
+        return d.keys().hasAll(['matchId', 'teamId', 'ownerId', 'playerId', 'selected', 'updatedAt'])
+          && d.keys().hasOnly(['matchId', 'teamId', 'ownerId', 'playerId', 'selected', 'updatedAt'])
+          && d.matchId is string && d.playerId is string && d.teamId is string
+          && selectionId == d.matchId + '_' + d.playerId
+          && d.ownerId == request.auth.uid && callupOwnsTeam(d.teamId)
+          && fixture.teamId == d.teamId && fixture.ownerId == d.ownerId
+          && fixture.kickoff > request.time
+          && d.selected is bool
+          && (!d.selected || callupMember(d.teamId, d.playerId, fixture.category))
+          && d.updatedAt == request.time;
+      }
+      allow create: if request.auth != null && validSelection();
+      allow update: if request.auth != null && validSelection()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['selected', 'updatedAt']);
+      allow delete: if false;
+    }
+
+
     // =========================
     // USUARIOS
     // =========================

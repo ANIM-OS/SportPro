@@ -98,3 +98,38 @@ Copyright © 2026 SPORT PRO. Todos los derechos reservados.
 El código fuente, diseño y documentación del proyecto no pueden ser copiados, modificados, distribuidos o utilizados con fines comerciales sin autorización de sus autores.
 
 Actualmente el proyecto no se encuentra abierto a contribuciones externas.
+
+## Prueba local de US-09 (sin publicar en Firebase)
+
+La variante `local` instala **SportPro Local** con un identificador diferente. Utiliza
+únicamente el proyecto ficticio `demo-sportpro` y los emuladores de Authentication y
+Firestore. Las variantes normales mantienen la nueva función deshabilitada hasta
+revisar e integrar las reglas publicadas; este cambio no debe desplegarse automáticamente.
+
+1. Abre un emulador Android y ejecuta `scripts/start-callups-local.command` (doble clic en macOS).
+   Mantén esa ventana abierta. Se necesita Java de Android Studio y Node/npm; el script
+   contempla las rutas del entorno de desarrollo actual. La primera ejecución descarga Firebase CLI.
+2. Ejecuta `scripts/prepare-callups-local.command`. Conecta los puertos mediante ADB,
+   prueba las reglas y crea datos ficticios locales. Solo modifica los registros de prueba
+   con identificadores `local-team` y `local-match` y las cuentas indicadas abajo.
+3. En Android Studio abre **Build Variants**, elige `local` para `app` y ejecuta.
+4. Inicia sesión por correo con `entrenador@sportpro.test` o `jugador@sportpro.test`.
+   Ambas cuentas de prueba usan `SportProLocal2026!` (solo emuladores).
+5. En **Equipos → Convocatorias**, el entrenador selecciona equipo y partido, marca
+   jugadores de la categoría y guarda. Puede registrar un partido o editar rival y horario.
+   El jugador ve su estado en **Mis convocatorias**, incluidos los retiros.
+6. La base de pruebas está en http://127.0.0.1:4000/firestore. No contiene datos del proyecto real.
+
+Los partidos se guardan en `matchFixtures`; cada selección, en `matchCallupPlayers`,
+con identidad estable de partido y jugador. El rival se introduce únicamente al registrar
+el partido; en la convocatoria todos los datos se seleccionan o se muestran automáticamente.
+La categoría de un partido guardado es inmutable para no invalidar las convocatorias existentes.
+Las escrituras validan propiedad del equipo, rol, membresía, categoría y fecha futura.
+La retirada se conserva como estado visible para el jugador. Las actualizaciones usan listeners.
+Cada selección se guarda con una transacción independiente: si alguna falla, se informa de un
+posible guardado parcial y se permite reintentar; no se promete atomicidad de toda la lista.
+Los borradores antiguos del dispositivo no se migran ni se eliminan.
+
+Las reglas nuevas están añadidas solo a las colecciones de US-09. Antes de un despliegue real,
+se deben reconciliar con las reglas actualmente publicadas y acordar con el equipo la fuente
+común de partidos. Las pantallas de demostración de otras historias no se modifican aquí.
