@@ -287,7 +287,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
             }
             Text(if (approvedOwner) "Toca una posición para asignar un jugador" else "Alineación guardada", style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(10.dp))
-            Pitch(formation, positions, state.members, approvedOwner) { selectedSlot = it }
+            LineupPitch(formation, positions, state.members, approvedOwner) { selectedSlot = it }
             Spacer(Modifier.height(12.dp))
             if (approvedOwner) Button(onClick = { viewModel.saveLineup(team, TeamLineup(category, formation, positions)) },
                 enabled = !state.managementBusy && !state.lineupLoading && category.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
@@ -315,40 +315,6 @@ private fun MemberDialog(team: Team, member: TeamMember, busy: Boolean, error: S
         },
         confirmButton = { TextButton(onClick = { onSave(member.copy(playerName = name, category = category, jerseyNumber = jersey.toIntOrNull())) }, enabled = !busy) { Text("Guardar") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } })
-}
-
-private fun formationSlots(formation: String): List<Triple<Float, Float, String>> {
-    val parts = formation.split('-').map(String::toInt)
-    val rows = listOf(parts[2] to 0.18f, parts[1] to 0.43f, parts[0] to 0.72f, 1 to 0.90f)
-    val names = listOf("DEL", "MED", "DEF", "POR")
-    return rows.flatMapIndexed { rowIndex, (count, y) ->
-        (0 until count).map { i -> Triple((i + 1f) / (count + 1f), y, names[rowIndex]) }
-    }
-}
-
-@Composable
-private fun Pitch(formation: String, positions: Map<String, String>, members: List<TeamMember>, owner: Boolean, onSlot: (Int) -> Unit) {
-    BoxWithConstraints(Modifier.fillMaxWidth().height(450.dp).background(Color(0xFF174735), RoundedCornerShape(16.dp))
-        .border(BorderStroke(2.dp, Color(0xFF679983)), RoundedCornerShape(16.dp))) {
-        Canvas(Modifier.fillMaxSize().padding(14.dp)) {
-            val line = Color.White.copy(alpha = 0.45f)
-            drawLine(line,
-                Offset(0f, size.height / 2), androidx.compose.ui.geometry.Offset(size.width, size.height / 2), 2f)
-            drawCircle(line, radius = size.width * .10f, center = center, style = Stroke(2f))
-            drawRect(line, style = Stroke(2f))
-        }
-        formationSlots(formation).forEachIndexed { index, (x, y, role) ->
-            val member = members.firstOrNull { it.userId == positions["P$index"] }
-            Surface(onClick = { if (owner) onSlot(index) },
-                modifier = Modifier.offset(x = maxWidth * x - 30.dp, y = maxHeight * y - 30.dp).size(60.dp),
-                shape = CircleShape, color = Color(0xFF10362B), border = BorderStroke(2.dp, Color.White.copy(alpha = .75f))) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Text(member?.jerseyNumber?.let { "#$it" } ?: if (owner) "+" else "·", color = Color.White, fontWeight = FontWeight.Bold)
-                    Text(member?.playerName?.take(8) ?: role, color = Color.White, fontSize = 9.sp, maxLines = 1)
-                }
-            }
-        }
-    }
 }
 
 @Composable

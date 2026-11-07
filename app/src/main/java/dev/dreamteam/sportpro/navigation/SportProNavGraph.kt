@@ -492,6 +492,7 @@ fun SportProNavGraph(
                 TeamsScreen(
                     canCreateTeam = RoleAccess.can(roles, RoleCapability.CREATE_TEAM, isCoachApproved),
                     canJoinWithCode = RoleAccess.can(roles, RoleCapability.JOIN_WITH_CODE, isCoachApproved),
+                    canRespondAsGuardian = AppRole.PARENT in roles,
                     newlyCreatedTeamId = createdTeamId,
                     onNewTeamOpened = { backStackEntry?.savedStateHandle?.remove<String>("createdTeamId") },
                     onCreateTeamClick = {

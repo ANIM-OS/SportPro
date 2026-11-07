@@ -1,0 +1,88 @@
+import assert from 'node:assert/strict';
+import './availability-check.mjs';
+import {root,request,set,fields,account,coach,player,other,wrongCategory,fixture,selection,expect} from './emulator-check.mjs';
+const prefix='projects/demo-sportpro/databases/(default)/documents/';
+const update=(path,data)=>({update:{name:prefix+path,fields:fields(data)},updateTransforms:[{fieldPath:'updatedAt',setToServerValue:'REQUEST_TIME'}]});
+const remove=path=>({delete:prefix+path});
+const commit=(writes,token=coach.token)=>request(`${root}:commit`,{writes},token);
+const lineup=(id='local-match')=>`matchLineups/${id}`;
+const parent=(formation='4-3-3')=>({teamId:'local-team',formation});
+const assignment=(id,kind,position)=>({playerId:id,kind,position});
+const assign=(id,kind,position,match='local-match')=>[
+  ...(kind==='STARTER' ? [update(`${lineup(match)}/slots/${position}`,{playerId:id})] : []),
+  update(`${lineup(match)}/players/${id}`,assignment(id,kind,position))
+];
+await set('teamLineups/local-team_SUB-17',{teamId:'local-team',category:'SUB-17',formation:'4-4-2',positions:{P0:player.id}},'owner',true);
+const generalBefore=await request(`${root}/teamLineups/local-team_SUB-17`,undefined,coach.token,'GET');
+expect(await set(lineup(),parent(),coach.token,true),200,'US11 create per-match lineup');
+expect(await commit(assign(player.id,'STARTER','P0')),200,'US11 called player assigned as starter');
+let r=await request(`${root}/${lineup()}/players/${player.id}`,undefined,coach.token,'GET');
+assert.equal(r.body.fields.position.stringValue,'P0');console.log('PASS US11 assignment persists on reload');
+expect(await commit(assign(other.id,'BENCH','DEF')),403,'US11 non-called player rejected');
+expect(await commit(assign(wrongCategory.id,'BENCH','DEF')),403,'US11 wrong category rejected');
+expect(await commit(assign(player.id,'BENCH','DEF'),player.token),403,'US11 player cannot edit lineup');
+expect(await set(lineup(),parent(),other.token,true),403,'US11 outsider cannot edit formation');
+expect(await request(`${root}/${lineup()}`,undefined,other.token,'GET'),403,'US11 outsider cannot read lineup');
+expect(await request(`${root}/${lineup()}/players`,undefined,player.token,'GET'),200,'US11 team player can consult lineup');
+expect(await commit([update(`${lineup()}/players/duplicate`,assignment(player.id,'BENCH','DEF'))]),403,'US11 player identity cannot be duplicated under another document');
+expect(await commit([update(`${lineup()}/players/${player.id}`,assignment(player.id,'BENCH','DEF'))]),403,'US11 bench move must release starter slot atomically');
+expect(await commit([remove(`${lineup()}/slots/P0`),...assign(player.id,'BENCH','DEF')]),200,'US11 starter moves to substitute without duplication');
+expect(await commit(assign(player.id,'STARTER','P1')),200,'US11 substitute moves back to starting position');
+expect(await commit([update(`${lineup()}/slots/P2`,{playerId:player.id})]),403,'US11 cannot occupy two starting slots');
+expect(await commit([remove(`${lineup()}/slots/P1`)]),403,'US11 cannot orphan a starter assignment');
+const players=[player];
+for(let i=1;i<=11;i++) {
+  const u=await account(`alineacion${i}@sportpro.test`);players.push(u);
+  await set(`users/${u.id}`,{email:`alineacion${i}@sportpro.test`,roles:['JUGADOR'],profileComplete:true});
+  await set(`teamMemberships/local-team_${u.id}`,{teamId:'local-team',userId:u.id,playerName:`Jugador ${i+1}`,category:'SUB-17'});
+  expect(await set(`matchCallupPlayers/local-match_${u.id}`,selection(u),coach.token,true),200,`US09 additional called player ${i+1}`);
+}
+expect(await commit(assign(players[1].id,'STARTER','P1')),403,'US11 occupied starting slot cannot be stolen');
+expect(await commit([remove(`${lineup()}/slots/P1`),...assign(player.id,'STARTER','P0')]),200,'US11 starter changes slot atomically');
+for(let i=1;i<=10;i++)expect(await commit(assign(players[i].id,'STARTER',`P${i}`)),200,`US11 full formation slot ${i}`);
+expect(await commit(assign(players[11].id,'BENCH','POR')),200,'US11 substitute keeps a specific position');
+expect(await commit(assign(players[11].id,'STARTER','P11')),403,'US11 twelfth starting position rejected');
+expect(await commit(assign(players[11].id,'BENCH','INVALID')),403,'US11 invalid substitute position rejected');
+r=await request(`${root}/${lineup()}/players`,undefined,coach.token,'GET');
+assert.equal(r.body.documents.length,12);assert.equal(r.body.documents.filter(d=>d.fields.kind.stringValue==='STARTER').length,11);console.log('PASS US11 complete 11 starters and 1 substitute persisted');
+await set('matchFixtures/lineup-other',{...fixture,opponent:'Segundo rival'},coach.token,true);
+await set(`matchCallupPlayers/lineup-other_${player.id}`,{...selection(player),matchId:'lineup-other'},coach.token,true);
+expect(await set(lineup('lineup-other'),parent('4-4-2'),coach.token,true),200,'US11 create independent second match lineup');
+expect(await commit(assign(player.id,'BENCH','MED','lineup-other')),200,'US11 same player different role in second match');
+r=await request(`${root}/${lineup()}/players/${player.id}`,undefined,coach.token,'GET');assert.equal(r.body.fields.kind.stringValue,'STARTER');console.log('PASS US11 second match does not overwrite first lineup');
+expect(await set(lineup(),parent('3-5-2'),coach.token,true),200,'US11 edit saved formation');
+expect(await set(`matchCallupPlayers/local-match_${player.id}`,{...selection(player),selected:false},coach.token,true),403,'US11 withdrawal cannot leave player in lineup');
+expect(await commit([remove(`${lineup()}/slots/P0`),remove(`${lineup()}/players/${player.id}`),update(`matchCallupPlayers/local-match_${player.id}`,{...selection(player),selected:false})]),200,'US09 withdrawal clears lineup atomically');
+expect(await commit(assign(player.id,'BENCH','POR')),403,'US11 withdrawn player cannot be reselected');
+await set(`matchCallupPlayers/local-match_${player.id}`,selection(player),coach.token,true);
+expect(await commit(assign(player.id,'STARTER','P0')),200,'US11 recalled player can be restored');
+await set(`teamMemberships/local-team_${player.id}`,{teamId:'local-team',userId:player.id,playerName:'Jugador de prueba',category:'SUB-15'});
+expect(await commit(assign(player.id,'STARTER','P0')),403,'US11 membership category revalidated on write');
+await set(`teamMemberships/local-team_${player.id}`,{teamId:'local-team',userId:player.id,playerName:'Jugador de prueba',category:'SUB-17'});
+await set(`coachApprovals/${coach.id}`,{approved:false});
+expect(await set(lineup(),parent(),coach.token,true),403,'US11 coach approval revoked');
+await set(`coachApprovals/${coach.id}`,{approved:true});
+await set('matchFixtures/local-match',{...fixture,kickoff:new Date(0)},'owner',true);
+expect(await commit(assign(players[11].id,'BENCH','DEF')),403,'US11 lineup locked after kickoff');
+await set('matchFixtures/local-match',fixture,'owner',true);
+expect(await set(lineup(),parent(),coach.token,true),200,'US11 restore test formation');
+// Preserve a real encounter snapshot for the linked parent and the visual availability demo.
+const current=await request(`${root}/matchFixtures/local-match`,undefined,'owner','GET');
+const encounter={opponent:current.body.fields.opponent.stringValue,category:'SUB-17',kickoff:new Date(current.body.fields.kickoff.timestampValue),responseDeadline:new Date(current.body.fields.kickoff.timestampValue)};
+await set(`matchCallupPlayers/local-match_${player.id}`,{...selection(player),encounter},coach.token,true);
+const generalAfter=await request(`${root}/teamLineups/local-team_SUB-17`,undefined,coach.token,'GET');
+assert.deepEqual(generalAfter.body.fields,generalBefore.body.fields);console.log('PASS US11 general team lineup remains unchanged');
+const strangerCoach=await account('otro.entrenador@sportpro.test');
+await set(`users/${strangerCoach.id}`,{email:'otro.entrenador@sportpro.test',roles:['ENTRENADOR'],profileComplete:true});
+await set(`coachApprovals/${strangerCoach.id}`,{approved:true});
+expect(await set(lineup(),parent(),strangerCoach.token,true),403,'US11 approved coach of another team cannot edit');
+expect(await commit(assign(players[11].id,'BENCH','DEF'),strangerCoach.token),403,'US11 approved outsider cannot assign players');
+// Two concurrent updates to the same free slot must not both succeed.
+expect(await commit([remove(`${lineup()}/slots/P10`),remove(`${lineup()}/players/${players[10].id}`),remove(`${lineup()}/players/${players[11].id}`)]),200,'US11 prepare concurrent slot test');
+const race=await Promise.all([commit(assign(players[10].id,'STARTER','P10')),commit(assign(players[11].id,'STARTER','P10'))]);
+assert.deepEqual(race.map(r=>r.status).sort(),[200,403]);console.log('PASS US11 concurrent writes cannot duplicate a starting slot');
+const winner=race[0].status===200 ? players[10] : players[11];
+await commit([remove(`${lineup()}/slots/P10`),remove(`${lineup()}/players/${winner.id}`)]);
+expect(await commit(assign(players[10].id,'STARTER','P10')),200,'US11 restore starter after concurrency check');
+expect(await commit(assign(players[11].id,'BENCH','POR')),200,'US11 restore substitute after concurrency check');
+console.log('US11 rules, isolation, persistence and dependencies verified locally.');

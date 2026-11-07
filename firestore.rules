@@ -18,8 +18,7 @@ service cloud.firestore {
 
     // US-09. New collections only; existing team and community rules stay intact.
     function callupOwnsTeam(teamId) {
-      return request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+      return isApprovedCoach()
         && get(/databases/$(database)/documents/teams/$(teamId)).data.createdBy == request.auth.uid;
     }
     function callupMember(teamId, playerId, category) {
@@ -34,7 +33,7 @@ service cloud.firestore {
       function validFixture() {
         let d = request.resource.data;
         return d.keys().hasAll(['teamId', 'ownerId', 'category', 'opponent', 'kickoff', 'updatedAt'])
-          && d.keys().hasOnly(['teamId', 'ownerId', 'category', 'opponent', 'kickoff', 'updatedAt'])
+          && d.keys().hasOnly(['teamId', 'ownerId', 'category', 'opponent', 'kickoff', 'responseDeadline', 'updatedAt'])
           && d.teamId is string && d.ownerId == request.auth.uid
           && callupOwnsTeam(d.teamId)
           && get(/databases/$(database)/documents/teams/$(d.teamId)).data.type == 'EQUIPO'
@@ -42,38 +41,164 @@ service cloud.firestore {
           && d.category in get(/databases/$(database)/documents/teams/$(d.teamId)).data.categories
           && d.opponent is string && d.opponent.size() > 0 && d.opponent.size() <= 100
           && d.kickoff is timestamp && d.kickoff > request.time
+          && d.get('responseDeadline', d.kickoff) is timestamp
+          && d.get('responseDeadline', d.kickoff) > request.time
+          && d.get('responseDeadline', d.kickoff) <= d.kickoff
           && d.updatedAt == request.time;
       }
       allow create: if request.auth != null && validFixture();
       allow update: if request.auth != null && validFixture()
-        && resource.data.kickoff > request.time
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['opponent', 'kickoff', 'updatedAt']);
+        && resource.data.get('responseDeadline', resource.data.kickoff) > request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['opponent', 'kickoff', 'responseDeadline', 'updatedAt']);
       allow delete: if false;
     }
     match /matchCallupPlayers/{selectionId} {
       allow read: if request.auth != null && (
         resource.data.playerId == request.auth.uid || resource.data.ownerId == request.auth.uid
+        || availabilityGuardian(resource.data.playerId)
       );
       function validSelection() {
         let d = request.resource.data;
-        let fixture = get(/databases/$(database)/documents/matchFixtures/$(d.matchId)).data;
+        let fixture = getAfter(/databases/$(database)/documents/matchFixtures/$(d.matchId)).data;
         return d.keys().hasAll(['matchId', 'teamId', 'ownerId', 'playerId', 'selected', 'updatedAt'])
-          && d.keys().hasOnly(['matchId', 'teamId', 'ownerId', 'playerId', 'selected', 'updatedAt'])
+          && d.keys().hasOnly(['matchId', 'teamId', 'ownerId', 'playerId', 'selected', 'encounter', 'updatedAt'])
           && d.matchId is string && d.playerId is string && d.teamId is string
           && selectionId == d.matchId + '_' + d.playerId
           && d.ownerId == request.auth.uid && callupOwnsTeam(d.teamId)
           && fixture.teamId == d.teamId && fixture.ownerId == d.ownerId
           && fixture.kickoff > request.time
           && d.selected is bool
-          && (!d.selected || callupMember(d.teamId, d.playerId, fixture.category))
+          && (d.selected || !existsAfter(/databases/$(database)/documents/matchLineups/$(d.matchId)/players/$(d.playerId)))
+          && (!d.selected || (resource != null && resource.data.selected == true
+              && get(/databases/$(database)/documents/matchFixtures/$(d.matchId)).data != fixture
+              && d.diff(resource.data).affectedKeys().hasOnly(['encounter', 'updatedAt']))
+            || callupMember(d.teamId, d.playerId, fixture.category))
+          && (!d.keys().hasAny(['encounter']) || (
+            d.encounter.keys().hasAll(['opponent', 'category', 'kickoff', 'responseDeadline'])
+            && d.encounter.keys().hasOnly(['opponent', 'category', 'kickoff', 'responseDeadline'])
+            && d.encounter.opponent == fixture.opponent && d.encounter.category == fixture.category
+            && d.encounter.kickoff == fixture.kickoff
+            && d.encounter.responseDeadline == fixture.get('responseDeadline', fixture.kickoff)))
           && d.updatedAt == request.time;
       }
       allow create: if request.auth != null && validSelection();
       allow update: if request.auth != null && validSelection()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['selected', 'updatedAt']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['selected', 'encounter', 'updatedAt']);
       allow delete: if false;
     }
 
+
+    // US-11: match-specific lineups. General teamLineups are unchanged.
+    function lineupFixture(matchId) {
+      return get(/databases/$(database)/documents/matchFixtures/$(matchId)).data;
+    }
+    function canReadMatchLineup(matchId) {
+      let fixture = lineupFixture(matchId);
+      return request.auth != null && (callupOwnsTeam(fixture.teamId)
+        || callupMember(fixture.teamId, request.auth.uid, fixture.category));
+    }
+    function canWriteMatchLineup(matchId) {
+      let fixture = lineupFixture(matchId);
+      return request.auth != null && callupOwnsTeam(fixture.teamId) && request.time < fixture.kickoff;
+    }
+    function starterPosition(position) {
+      return position in ['P0','P1','P2','P3','P4','P5','P6','P7','P8','P9','P10'];
+    }
+    match /matchLineups/{matchId} {
+      allow read: if canReadMatchLineup(matchId);
+      allow create, update: if canWriteMatchLineup(matchId)
+        && request.resource.data.keys().hasAll(['teamId','formation','updatedAt'])
+        && request.resource.data.keys().hasOnly(['teamId','formation','updatedAt'])
+        && request.resource.data.teamId == lineupFixture(matchId).teamId
+        && request.resource.data.formation in ['4-3-3','4-4-2','3-5-2']
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+      match /players/{playerId} {
+        allow read: if canReadMatchLineup(matchId);
+        function validAssignment() {
+          let d = request.resource.data;
+          let fixture = lineupFixture(matchId);
+          let callup = get(/databases/$(database)/documents/matchCallupPlayers/$(matchId + '_' + playerId)).data;
+          return d.keys().hasAll(['playerId','kind','position','updatedAt'])
+            && d.keys().hasOnly(['playerId','kind','position','updatedAt'])
+            && d.playerId == playerId
+            && callup.selected == true && callup.matchId == matchId && callup.teamId == fixture.teamId
+            && callupMember(fixture.teamId, playerId, fixture.category)
+            && getAfter(/databases/$(database)/documents/matchLineups/$(matchId)).data.formation in ['4-3-3','4-4-2','3-5-2']
+            && ((d.kind == 'STARTER' && starterPosition(d.position)
+                && getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/slots/$(d.position)).data.playerId == playerId)
+              || (d.kind == 'BENCH' && d.position in ['POR','DEF','MED','DEL']))
+            && (resource == null || resource.data.kind != 'STARTER'
+              || (d.kind == 'STARTER' && d.position == resource.data.position)
+              || !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/slots/$(resource.data.position)))
+            && d.updatedAt == request.time;
+        }
+        allow create, update: if canWriteMatchLineup(matchId) && validAssignment();
+        allow delete: if canWriteMatchLineup(matchId) && (resource.data.kind != 'STARTER'
+          || !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/slots/$(resource.data.position)));
+      }
+      match /slots/{position} {
+        allow read: if canReadMatchLineup(matchId);
+        function validSlot() {
+          let d = request.resource.data;
+          let assignment = getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(d.playerId)).data;
+          return starterPosition(position) && d.keys().hasAll(['playerId','updatedAt'])
+            && d.keys().hasOnly(['playerId','updatedAt']) && d.playerId is string
+            && assignment.playerId == d.playerId && assignment.kind == 'STARTER' && assignment.position == position
+            && (resource == null || resource.data.playerId == d.playerId
+              || !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId))
+              || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.kind != 'STARTER'
+              || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.position != position)
+            && d.updatedAt == request.time;
+        }
+        allow create, update: if canWriteMatchLineup(matchId) && validSlot();
+        allow delete: if canWriteMatchLineup(matchId) && (
+          !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId))
+          || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.kind != 'STARTER'
+          || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.position != position);
+      }
+    }
+
+    // US-10: one persistent response per selected player, shared with their authorized guardian.
+    function availabilityGuardian(playerId) {
+      return isVerifiedGuardianOf(playerId)
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['PADRE / TUTOR']);
+    }
+    function availabilityActor(playerId) {
+      return request.auth != null && (
+        (request.auth.uid == playerId
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['JUGADOR']))
+        || availabilityGuardian(playerId));
+    }
+    match /matchAvailability/{selectionId} {
+      allow get: if request.auth != null && (
+        availabilityActor(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.playerId)
+        || callupOwnsTeam(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.teamId));
+      allow list: if request.auth != null && resource.data.ownerId == request.auth.uid
+        && callupOwnsTeam(resource.data.teamId);
+      function validResponse() {
+        let d = request.resource.data;
+        let selection = get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data;
+        let fixture = get(/databases/$(database)/documents/matchFixtures/$(selection.matchId)).data;
+        return d.keys().hasAll(['matchId', 'teamId', 'ownerId', 'playerId', 'status', 'respondedBy', 'updatedAt'])
+          && d.keys().hasOnly(['matchId', 'teamId', 'ownerId', 'playerId', 'status', 'respondedBy', 'updatedAt'])
+          && selection.selected == true
+          && d.matchId == selection.matchId && d.teamId == selection.teamId
+          && d.ownerId == selection.ownerId && d.playerId == selection.playerId
+          && selectionId == d.matchId + '_' + d.playerId
+          && fixture.teamId == d.teamId
+          && callupMember(d.teamId, d.playerId, fixture.category)
+          && availabilityActor(d.playerId)
+          && request.time < fixture.get('responseDeadline', fixture.kickoff)
+          && request.time < fixture.kickoff
+          && d.status in ['AVAILABLE', 'UNAVAILABLE']
+          && d.respondedBy == request.auth.uid && d.updatedAt == request.time;
+      }
+      allow create: if request.auth != null && validResponse();
+      allow update: if request.auth != null && validResponse()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedBy', 'updatedAt']);
+      allow delete: if false;
+    }
 
     // =========================
     // USUARIOS
