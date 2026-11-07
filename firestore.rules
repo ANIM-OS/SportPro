@@ -16,7 +16,10 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'email',
           'roles',
-          'profileComplete'
+          'profileComplete',
+          'firstName',
+          'lastName',
+          'createdAt'
         ])
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.profileComplete == true
@@ -26,7 +29,19 @@ service cloud.firestore {
           'JUGADOR',
           'ENTRENADOR',
           'PADRE / TUTOR'
-        ]);
+        ])
+        && (!request.resource.data.keys().hasAny(['firstName'])
+          || (request.resource.data.firstName is string
+            && request.resource.data.firstName.size() > 0
+            && request.resource.data.firstName.size() <= 100))
+        && (!request.resource.data.keys().hasAny(['lastName'])
+          || (request.resource.data.lastName is string
+            && request.resource.data.lastName.size() > 0
+            && request.resource.data.lastName.size() <= 100))
+        && (resource == null
+          ? (!request.resource.data.keys().hasAny(['createdAt'])
+            || request.resource.data.createdAt == request.time)
+          : request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null));
 
       allow delete: if false;
     }

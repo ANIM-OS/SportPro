@@ -31,6 +31,7 @@ import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.GoogleAuthProvider
 import dev.dreamteam.sportpro.ui.auth.*
 import dev.dreamteam.sportpro.ui.theme.SportProTheme
 import kotlinx.coroutines.CancellationException
@@ -66,6 +67,7 @@ class MainActivity : ComponentActivity() {
                 }
                 LaunchedEffect(Unit) { authViewModel.checkSession() }
                 var errorMessage by remember { mutableStateOf<String?>(null) }
+                var isEmailError by remember { mutableStateOf(false) }
                 var isSigningOut by remember { mutableStateOf(false) }
                 val isLoading = authState is AuthState.Loading || isSigningOut
                 val isGoogleLoading = (authState as? AuthState.Loading)?.isGoogle == true
@@ -83,10 +85,12 @@ class MainActivity : ComponentActivity() {
                             registeredEmail = FirebaseAuth.getInstance().currentUser?.email ?: "usuario@sportpro.dev"
                             currentScreen = if (state.needsRoleSelection) Screen.ROLE_SELECTION else Screen.HOME
                             if (!state.needsRoleSelection) editingRoles = false
+                            state.message?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
                             authViewModel.resetState()
                         }
                         is AuthState.Error -> {
                             errorMessage = state.message
+                            isEmailError = state.isEmailError
                             Toast.makeText(context, state.message, Toast.LENGTH_LONG).show()
                             authViewModel.resetState()
                         }
@@ -114,6 +118,42 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                val startGoogleSignIn: () -> Unit = {
+                    if (!isSigningOut && authViewModel.beginGoogleSignIn()) {
+                        scope.launch {
+                            try {
+                                val googleIdOption = GetSignInWithGoogleOption.Builder(
+                                    context.getString(R.string.default_web_client_id)
+                                ).build()
+
+                                val request = GetCredentialRequest.Builder()
+                                    .addCredentialOption(googleIdOption)
+                                    .build()
+
+                                val result = credentialManager.getCredential(context, request)
+                                val credential = result.credential
+
+                                if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                                    val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
+                                    val googleIdToken = googleIdTokenCredential.idToken
+                                    authViewModel.signInWithGoogle(googleIdToken)
+                                } else {
+                                    authViewModel.googleSignInFailed("Credencial de Google no válida")
+                                }
+                            } catch (e: GetCredentialCancellationException) {
+                                authViewModel.cancelGoogleSignIn()
+                            } catch (e: CancellationException) {
+                                authViewModel.cancelGoogleSignIn()
+                                throw e
+                            } catch (e: GoogleIdTokenParsingException) {
+                                authViewModel.googleSignInFailed("No se pudo validar la credencial de Google")
+                            } catch (e: GetCredentialException) {
+                                authViewModel.googleSignInFailed("No se pudo iniciar sesión con Google. Inténtalo nuevamente")
+                            }
+                        }
+                    }
+                }
+
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -123,41 +163,7 @@ class MainActivity : ComponentActivity() {
                             onLoginClick = { email, pass ->
                                 authViewModel.login(email, pass)
                             },
-                            onGoogleLoginClick = {
-                                if (!isSigningOut && authViewModel.beginGoogleSignIn()) {
-                                    scope.launch {
-                                        try {
-                                            val googleIdOption = GetSignInWithGoogleOption.Builder(
-                                                context.getString(R.string.default_web_client_id)
-                                            ).build()
-
-                                            val request = GetCredentialRequest.Builder()
-                                                .addCredentialOption(googleIdOption)
-                                                .build()
-
-                                            val result = credentialManager.getCredential(context, request)
-                                            val credential = result.credential
-
-                                            if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                                                val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
-                                                val googleIdToken = googleIdTokenCredential.idToken
-                                                authViewModel.signInWithGoogle(googleIdToken)
-                                            } else {
-                                                authViewModel.googleSignInFailed("Credencial de Google no válida")
-                                            }
-                                        } catch (e: GetCredentialCancellationException) {
-                                            authViewModel.cancelGoogleSignIn()
-                                        } catch (e: CancellationException) {
-                                            authViewModel.cancelGoogleSignIn()
-                                            throw e
-                                        } catch (e: GoogleIdTokenParsingException) {
-                                            authViewModel.googleSignInFailed("No se pudo validar la credencial de Google")
-                                        } catch (e: GetCredentialException) {
-                                            authViewModel.googleSignInFailed("No se pudo iniciar sesión con Google. Inténtalo nuevamente")
-                                        }
-                                    }
-                                }
-                            },
+                            onGoogleLoginClick = startGoogleSignIn,
                             onForgotPasswordClick = { email -> authViewModel.sendPasswordReset(email) },
                             onNavigateToRegister = {
                                 errorMessage = null
@@ -170,23 +176,30 @@ class MainActivity : ComponentActivity() {
                             onToggleTheme = { isDarkTheme = !isDarkTheme }
                         )
                         Screen.REGISTER -> RegisterScreen(
-                            onRegisterClick = { email, pass ->
-                                authViewModel.register(email, pass)
+                            onRegisterClick = { firstName, lastName, email, pass, roles ->
+                                authViewModel.register(firstName, lastName, email, pass, roles)
                             },
+                            onGoogleRegisterClick = startGoogleSignIn,
                             onNavigateToLogin = {
                                 errorMessage = null
                                 currentScreen = Screen.LOGIN
                             },
+                            onClearError = { errorMessage = null },
                             errorMessage = errorMessage,
+                            isEmailError = isEmailError,
                             isLoading = isLoading,
+                            isGoogleLoading = isGoogleLoading,
                             isDarkTheme = isDarkTheme,
                             onToggleTheme = { isDarkTheme = !isDarkTheme }
                         )
                         Screen.ROLE_SELECTION -> RoleSelectionScreen(
                             userEmail = registeredEmail,
-                            userName = registeredEmail.substringBefore("@").replace(".", " ").replaceFirstChar { it.uppercase() },
+                            userName = FirebaseAuth.getInstance().currentUser?.displayName?.takeIf { it.isNotBlank() }
+                                ?: registeredEmail.substringBefore("@").replace(".", " ").replaceFirstChar { it.uppercase() },
                             onEnterClick = { roles -> authViewModel.saveRoles(roles) },
                             initialRoles = sessionRoles.map { it.code }.toSet(),
+                            isGoogleAccount = FirebaseAuth.getInstance().currentUser?.providerData.orEmpty()
+                                .any { it.providerId == GoogleAuthProvider.PROVIDER_ID },
                             isLoading = isLoading,
                             onCancelClick = {
                                 if (editingRoles) {
