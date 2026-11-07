@@ -76,7 +76,7 @@ class PlayerProfileViewModel : ViewModel() {
     }
 
     private fun loadPhoto(profile: PlayerProfile) {
-        val key = "${profile.photoPath}|${profile.photoBase64.length}|${profile.updatedAt?.seconds}"
+        val key = "${profile.photoPath}|${profile.photoBase64.hashCode()}"
         if (key == loadedPhotoKey) return
         loadedPhotoKey = key
         repository.loadPhoto(profile) { bitmap -> _uiState.update { it.copy(photo = bitmap) } }
