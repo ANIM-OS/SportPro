@@ -162,6 +162,67 @@ service cloud.firestore {
     }
 
     // =========================
+    // US-20: AVISOS DE PRUEBAS Y CONVOCATORIAS
+    // Vigente o vencido se calcula en la app con deadline (plan Spark, sin Cloud Functions).
+    // =========================
+    match /tryoutNotices/{noticeId} {
+      allow read: if request.auth != null;
+
+      allow create: if isApprovedCoach()
+        && request.resource.data.keys().hasAll([
+          'authorId', 'authorName', 'title', 'description', 'status', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'authorId', 'authorName', 'title', 'description', 'category', 'position',
+          'tryoutDate', 'location', 'deadline', 'status', 'createdAt'
+        ])
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.authorName is string
+        && request.resource.data.authorName.size() > 0
+        && request.resource.data.authorName.size() <= 100
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 100
+        && request.resource.data.description is string
+        && request.resource.data.description.size() > 0
+        && request.resource.data.description.size() <= 2000
+        // Mismas listas que SportCatalog en la app
+        && (!request.resource.data.keys().hasAny(['category'])
+          || request.resource.data.category in [
+            'SUB-10', 'SUB-12', 'SUB-15', 'SUB-17', 'PRIMERA', 'FEMENIL-SUB-15', 'FEMENIL-SUB-17'
+          ])
+        && (!request.resource.data.keys().hasAny(['position'])
+          || request.resource.data.position in [
+            'Portero', 'Defensa central', 'Lateral', 'Mediocampista', 'Extremo', 'Delantero'
+          ])
+        && (!request.resource.data.keys().hasAny(['location'])
+          || (request.resource.data.location is string
+            && request.resource.data.location.size() > 0
+            && request.resource.data.location.size() <= 120))
+        && (!request.resource.data.keys().hasAny(['tryoutDate'])
+          || request.resource.data.tryoutDate is timestamp)
+        // No se puede publicar un aviso ya vencido
+        && (!request.resource.data.keys().hasAny(['deadline'])
+          || (request.resource.data.deadline is timestamp
+            && request.resource.data.deadline > request.time))
+        // La app exige fecha límite <= día de la prueba; el margen cubre zonas horarias
+        && (!request.resource.data.keys().hasAll(['deadline', 'tryoutDate'])
+          || request.resource.data.deadline <= request.resource.data.tryoutDate + duration.value(2, 'd'))
+        && request.resource.data.status == 'ACTIVE'
+        && request.resource.data.createdAt == request.time;
+
+      // Solo se puede cancelar: lo hace el autor (aunque ya no esté aprobado) o un administrador.
+      allow update: if request.auth != null
+        && (resource.data.authorId == request.auth.uid || isAdmin())
+        && resource.data.status == 'ACTIVE'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt'])
+        && request.resource.data.status == 'CANCELLED'
+        && request.resource.data.cancelledAt == request.time;
+
+      allow delete: if false;
+    }
+
+    // =========================
     // EQUIPOS Y ACADEMIAS
     // =========================
     match /teams/{teamId} {

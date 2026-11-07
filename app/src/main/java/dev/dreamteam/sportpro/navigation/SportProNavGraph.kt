@@ -37,7 +37,16 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
+import dev.dreamteam.sportpro.ui.tryouts.CreateTryoutScreen
+import dev.dreamteam.sportpro.ui.tryouts.TryoutsScreen
+import dev.dreamteam.sportpro.ui.tryouts.TryoutsViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -98,6 +107,12 @@ sealed class SportProRoute(
     data object CreatePost : SportProRoute(
         route = "create_post",
         title = "Nueva publicación"
+    )
+
+    // US-20: se abre desde la pestaña Convocatorias de Comunidad
+    data object CreateTryout : SportProRoute(
+        route = "create_tryout",
+        title = "Nuevo aviso"
     )
 
     data object Teams : SportProRoute(
@@ -396,17 +411,52 @@ fun SportProNavGraph(
             }
 
             composable(SportProRoute.Community.route) {
-                CommunityScreen(
-                    canCreatePost = RoleAccess.can(roles, RoleCapability.CREATE_POST, isCoachApproved),
-                    onCreatePostClick = {
-                        navController.navigate(
-                            SportProRoute.CreatePost.route
-                        )
-                    },
-                    onOpenComments = { postId ->
-                        navController.navigate(SportProRoute.PostComments.create(postId))
+                // La barra inferior ya tiene 5 destinos: Convocatorias (US-20) es una pestaña de Comunidad.
+                var communityTab by rememberSaveable { mutableIntStateOf(0) }
+                Column(modifier = Modifier.fillMaxSize()) {
+                    PrimaryTabRow(
+                        selectedTabIndex = communityTab,
+                        containerColor = MaterialTheme.colorScheme.background
+                    ) {
+                        Tab(selected = communityTab == 0, onClick = { communityTab = 0 }, text = { Text("PUBLICACIONES") })
+                        Tab(selected = communityTab == 1, onClick = { communityTab = 1 }, text = { Text("CONVOCATORIAS") })
                     }
-                )
+                    Box(modifier = Modifier.weight(1f)) {
+                        if (communityTab == 0) {
+                            CommunityScreen(
+                                canCreatePost = RoleAccess.can(roles, RoleCapability.CREATE_POST, isCoachApproved),
+                                onCreatePostClick = {
+                                    navController.navigate(
+                                        SportProRoute.CreatePost.route
+                                    )
+                                },
+                                onOpenComments = { postId ->
+                                    navController.navigate(SportProRoute.PostComments.create(postId))
+                                }
+                            )
+                        } else {
+                            TryoutsScreen(
+                                canPublish = RoleAccess.can(roles, RoleCapability.PUBLISH_TRYOUT, isCoachApproved),
+                                onCreateClick = { navController.navigate(SportProRoute.CreateTryout.route) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            composable(SportProRoute.CreateTryout.route) { entry ->
+                // Mismo ViewModel que la pestaña Convocatorias, como en CreatePost.
+                val communityEntry = remember(entry) {
+                    runCatching { navController.getBackStackEntry(SportProRoute.Community.route) }.getOrDefault(entry)
+                }
+                RoleGate(roles, RoleCapability.PUBLISH_TRYOUT, isCoachApproved) {
+                    CreateTryoutScreen(
+                        onBack = {
+                            navController.popBackStack(SportProRoute.CreateTryout.route, inclusive = true)
+                        },
+                        viewModel = viewModel<TryoutsViewModel>(viewModelStoreOwner = communityEntry)
+                    )
+                }
             }
 
             composable(SportProRoute.CreatePost.route) { entry ->

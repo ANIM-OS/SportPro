@@ -12,7 +12,8 @@ class RoleAccessTest {
         RoleCapability.CREATE_TEAM,
         RoleCapability.MANAGE_EVENT_CATALOG,
         RoleCapability.REGISTER_EVENTS,
-        RoleCapability.EDIT_EVENTS
+        RoleCapability.EDIT_EVENTS,
+        RoleCapability.PUBLISH_TRYOUT
     )
 
     @Test

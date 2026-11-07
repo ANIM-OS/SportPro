@@ -26,7 +26,8 @@ enum class RoleCapability {
     MANAGE_EVENT_CATALOG, // US-12
     REGISTER_EVENTS,      // US-13
     EDIT_EVENTS,          // US-14
-    COMMENT_POST          // US-19
+    COMMENT_POST,         // US-19
+    PUBLISH_TRYOUT        // US-20
 }
 
 /** Account-wide UI capabilities derived from profile roles. Firestore enforces writes. */
@@ -41,6 +42,7 @@ object RoleAccess {
             RoleCapability.REGISTER_EVENTS -> approvedCoach
             RoleCapability.EDIT_EVENTS -> approvedCoach
             RoleCapability.COMMENT_POST -> roles.isNotEmpty()
+            RoleCapability.PUBLISH_TRYOUT -> approvedCoach
         }
     }
 }
