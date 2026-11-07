@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Shield
@@ -54,6 +55,7 @@ import dev.dreamteam.sportpro.ui.auth.RoleAccess
 import dev.dreamteam.sportpro.ui.auth.RoleCapability
 import dev.dreamteam.sportpro.ui.community.CommunityScreen
 import dev.dreamteam.sportpro.ui.community.CreatePostScreen
+import dev.dreamteam.sportpro.ui.training.TrainingNavHost
 import dev.dreamteam.sportpro.ui.community.PostCommentsScreen
 import dev.dreamteam.sportpro.ui.events.EventCatalogEditScreen
 import dev.dreamteam.sportpro.ui.events.EventCatalogScreen
@@ -104,6 +106,11 @@ sealed class SportProRoute(
     data object CreateTeam : SportProRoute(
         route = "create_team",
         title = "Nuevo equipo"
+    )
+
+    data object Training : SportProRoute(
+        route = "training",
+        title = "Entrenar"
     )
 
     // ── US-12 · Catálogo configurable de eventos del partido ──
@@ -187,7 +194,8 @@ fun SportProNavGraph(
         SportProRoute.Live,
         SportProRoute.Statistics,
         SportProRoute.Community,
-        SportProRoute.Teams
+        SportProRoute.Teams,
+        SportProRoute.Training
     )
 
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
@@ -299,6 +307,7 @@ fun SportProNavGraph(
                                     SportProRoute.Statistics -> Icons.Default.BarChart
                                     SportProRoute.Community -> Icons.Default.Groups
                                     SportProRoute.Teams -> Icons.Default.Shield
+                                    SportProRoute.Training -> Icons.Default.FitnessCenter
                                     // CreatePost, CreateTeam y las rutas de US-12/13/14/19 no están en la barra
                                     else -> Icons.Default.Add
                                 },
@@ -411,6 +420,10 @@ fun SportProNavGraph(
                         navController.navigate(SportProRoute.CreateTeam.route)
                     }
                 )
+            }
+
+            composable(SportProRoute.Training.route) {
+                TrainingNavHost(roles = roles)
             }
 
             composable(SportProRoute.CreateTeam.route) {

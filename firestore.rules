@@ -353,6 +353,8 @@ service cloud.firestore {
       allow read: if request.auth != null && (
         request.auth.uid == playerId
         || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+        // US-04: el padre o tutor vinculado y verificado puede consultar el perfil.
+        || isVerifiedGuardianOf(playerId)
       );
       allow create: if request.auth != null && (
         request.auth.uid == playerId
@@ -364,6 +366,191 @@ service cloud.firestore {
       );
 
       allow delete: if false;
+    }
+
+
+    // =========================
+    // US-04 a US-08: ENTRENAMIENTOS Y JUGADORES
+    // =========================
+
+    function isCoach() {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR']);
+    }
+
+    function ownsTeam(teamId) {
+      return get(/databases/$(database)/documents/teams/$(teamId)).data.createdBy == request.auth.uid;
+    }
+
+    // Padre o tutor con correo verificado y vinculado por el propio jugador.
+    function isVerifiedGuardianOf(playerId) {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/playerGuardians/$(playerId + '_' + request.auth.token.email.lower()));
+    }
+
+    // US-04: vínculos jugador - padre o tutor. Solo el propio jugador los crea o elimina.
+    match /playerGuardians/{linkId} {
+      allow read: if request.auth != null && (
+        resource.data.playerId == request.auth.uid
+        || (request.auth.token.email_verified == true
+          && resource.data.guardianEmail == request.auth.token.email.lower())
+      );
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['playerId', 'playerName', 'guardianEmail', 'createdBy', 'createdAt'])
+        && request.resource.data.playerId == request.auth.uid
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.playerName is string
+        && request.resource.data.playerName.size() <= 80
+        && request.resource.data.guardianEmail is string
+        && request.resource.data.guardianEmail.size() > 3
+        && request.resource.data.guardianEmail.size() <= 254
+        && request.resource.data.guardianEmail == request.resource.data.guardianEmail.lower()
+        && request.resource.data.guardianEmail != request.auth.token.email.lower()
+        && linkId == request.resource.data.playerId + '_' + request.resource.data.guardianEmail
+        && request.resource.data.createdAt == request.time;
+      allow update: if false;
+      allow delete: if request.auth != null && resource.data.playerId == request.auth.uid;
+    }
+
+    // US-07: biblioteca de ejercicios; cada entrenador administra los suyos.
+    match /exercises/{exerciseId} {
+      function validExercise() {
+        return request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 80
+          && request.resource.data.description is string
+          && request.resource.data.description.size() <= 500
+          && request.resource.data.durationMinutes is int
+          && request.resource.data.durationMinutes >= 1
+          && request.resource.data.durationMinutes <= 180;
+      }
+
+      allow read: if request.auth != null && resource.data.createdBy == request.auth.uid;
+      allow create: if isCoach()
+        && request.resource.data.keys().hasOnly(['createdBy', 'name', 'description', 'durationMinutes', 'createdAt', 'updatedAt'])
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && validExercise();
+      allow update: if request.auth != null
+        && resource.data.createdBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'description', 'durationMinutes', 'updatedAt'])
+        && request.resource.data.updatedAt == request.time
+        && validExercise();
+      // Las sesiones guardan una copia de sus ejercicios, así que eliminar no altera el historial.
+      allow delete: if request.auth != null && resource.data.createdBy == request.auth.uid;
+    }
+
+    // US-06: sesiones de entrenamiento del equipo.
+    match /trainingSessions/{sessionId} {
+      function validSession() {
+        let d = request.resource.data;
+        return d.teamId is string
+          && d.teamName is string
+          && d.category is string
+          && (d.category == 'TODAS'
+            || d.category in get(/databases/$(database)/documents/teams/$(d.teamId)).data.categories)
+          && d.date is timestamp
+          && d.date > request.time
+          && d.durationMinutes is int
+          && d.durationMinutes >= 1
+          && d.durationMinutes <= 600
+          && d.objectives is string
+          && d.objectives.size() > 0
+          && d.objectives.size() <= 500
+          && d.exercises is list
+          && d.exercises.size() <= 50;
+      }
+
+      // El entrenador que la creó y los jugadores del equipo pueden verla.
+      allow read: if request.auth != null && (
+        resource.data.createdBy == request.auth.uid
+        || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))
+      );
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly([
+          'teamId', 'teamName', 'category', 'createdBy', 'date', 'durationMinutes',
+          'objectives', 'exercises', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.createdBy == request.auth.uid
+        && ownsTeam(request.resource.data.teamId)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && validSession();
+      // Solo se modifica o elimina antes de su realización.
+      allow update: if request.auth != null
+        && resource.data.createdBy == request.auth.uid
+        && resource.data.date > request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'teamId', 'teamName', 'category', 'date', 'durationMinutes', 'objectives', 'exercises', 'updatedAt'
+        ])
+        && ownsTeam(request.resource.data.teamId)
+        && request.resource.data.updatedAt == request.time
+        && validSession();
+      allow delete: if request.auth != null
+        && resource.data.createdBy == request.auth.uid
+        && resource.data.date > request.time;
+    }
+
+    // US-08: asistencia; id "{sessionId}_{playerId}" para evitar duplicados.
+    match /attendance/{recordId} {
+      allow read: if request.auth != null && (
+        resource.data.coachId == request.auth.uid
+        || resource.data.playerId == request.auth.uid
+        || isVerifiedGuardianOf(resource.data.playerId)
+      );
+      allow create, update: if request.auth != null
+        && request.resource.data.keys().hasOnly([
+          'sessionId', 'teamId', 'teamName', 'coachId', 'playerId', 'playerName', 'status', 'sessionDate', 'updatedAt'
+        ])
+        && request.resource.data.coachId == request.auth.uid
+        && (resource == null || resource.data.coachId == request.auth.uid)
+        && recordId == request.resource.data.sessionId + '_' + request.resource.data.playerId
+        && get(/databases/$(database)/documents/trainingSessions/$(request.resource.data.sessionId)).data.createdBy == request.auth.uid
+        && get(/databases/$(database)/documents/trainingSessions/$(request.resource.data.sessionId)).data.teamId == request.resource.data.teamId
+        && exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId))
+        && request.resource.data.status in ['PRESENTE', 'TARDANZA', 'AUSENTE', 'JUSTIFICADO']
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // US-05: mensualidades simuladas; id "{playerId}_{periodo}" para no duplicar periodos.
+    match /monthlyFees/{feeId} {
+      // resource == null permite comprobar si el periodo ya existe antes de registrarlo.
+      allow get: if request.auth != null && (
+        resource == null
+        || resource.data.coachId == request.auth.uid
+        || resource.data.playerId == request.auth.uid
+        || isVerifiedGuardianOf(resource.data.playerId)
+      );
+      allow list: if request.auth != null && (
+        resource.data.coachId == request.auth.uid
+        || resource.data.playerId == request.auth.uid
+        || isVerifiedGuardianOf(resource.data.playerId)
+      );
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly([
+          'playerId', 'playerName', 'teamId', 'teamName', 'coachId', 'period', 'amount', 'status', 'paidAt', 'updatedAt'
+        ])
+        && request.resource.data.coachId == request.auth.uid
+        && ownsTeam(request.resource.data.teamId)
+        && exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId))
+        && request.resource.data.period is string
+        && request.resource.data.period.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')
+        && feeId == request.resource.data.playerId + '_' + request.resource.data.period
+        && request.resource.data.status in ['PENDIENTE', 'PAGADA']
+        && (!request.resource.data.keys().hasAny(['amount'])
+          || (request.resource.data.amount is number
+            && request.resource.data.amount >= 0
+            && request.resource.data.amount <= 100000))
+        && request.resource.data.updatedAt == request.time;
+      allow update: if request.auth != null
+        && resource.data.coachId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'paidAt', 'updatedAt'])
+        && request.resource.data.status in ['PENDIENTE', 'PAGADA']
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if request.auth != null && resource.data.coachId == request.auth.uid;
     }
   }
 }
