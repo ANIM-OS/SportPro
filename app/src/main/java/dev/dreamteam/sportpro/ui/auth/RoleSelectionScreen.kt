@@ -248,5 +248,12 @@ internal fun RoleOptions(
                 )
             }
         }
+        if ("ENTRENADOR" in selectedRoles) {
+            Text(
+                text = "Los permisos de entrenador se activan cuando la administración aprueba tu rol.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp
+            )
+        }
     }
 }

@@ -3,6 +3,19 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // El rol ENTRENADOR lo elige el usuario; la aprobación solo se crea desde la consola.
+    function isApprovedCoach() {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+        && exists(/databases/$(database)/documents/coachApprovals/$(request.auth.uid))
+        && get(/databases/$(database)/documents/coachApprovals/$(request.auth.uid)).data.approved == true;
+    }
+
     // =========================
     // USUARIOS
     // =========================
@@ -99,6 +112,9 @@ service cloud.firestore {
           /databases/$(database)/documents/users/$(request.auth.uid)
         ).data.roles
 
+        // Publicar como entrenador exige aprobación
+        && (request.resource.data.authorRole != 'ENTRENADOR' || isApprovedCoach())
+
         // Validación del contenido
         && request.resource.data.content is string
         && request.resource.data.content.size() > 0
@@ -118,9 +134,9 @@ service cloud.firestore {
         && request.resource.data.active == true
         && request.resource.data.moderated == false;
 
-      // Un moderador designado puede ocultar una publicación sin alterar su contenido.
+      // Un moderador designado o un administrador puede ocultar una publicación sin alterar su contenido.
       allow update: if request.auth != null
-        && exists(/databases/$(database)/documents/moderators/$(request.auth.uid))
+        && (exists(/databases/$(database)/documents/moderators/$(request.auth.uid)) || isAdmin())
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderated'])
         && resource.data.moderated == false
         && request.resource.data.moderated == true;
@@ -129,6 +145,19 @@ service cloud.firestore {
 
     match /moderators/{moderatorId} {
       allow get: if request.auth != null && request.auth.uid == moderatorId;
+      allow list, write: if false;
+    }
+
+    // =========================
+    // ADMINISTRADORES Y APROBACIÓN DE ENTRENADORES (se gestionan desde la consola)
+    // =========================
+    match /admins/{adminId} {
+      allow get: if request.auth != null && request.auth.uid == adminId;
+      allow list, write: if false;
+    }
+
+    match /coachApprovals/{coachId} {
+      allow get: if request.auth != null && request.auth.uid == coachId;
       allow list, write: if false;
     }
 
@@ -146,8 +175,7 @@ service cloud.firestore {
         || exists(/databases/$(database)/documents/teamMemberships/$(teamId + '_' + request.auth.uid))
       );
 
-      allow create: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+      allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
           'createdBy', 'name', 'type', 'categories', 'playerCount', 'createdAt',
           'city', 'description', 'primaryColor', 'secondaryColor', 'foundedYear',
@@ -212,8 +240,7 @@ service cloud.firestore {
         || get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
       );
 
-      allow create: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+      allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
           'teamId', 'teamName', 'invitedEmail', 'invitedBy', 'status', 'createdAt'
         ])
@@ -309,8 +336,7 @@ service cloud.firestore {
       );
       allow list: if request.auth != null
         && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid;
-      allow create: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+      allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly(['teamId', 'teamName', 'categories', 'createdBy', 'createdAt', 'expiresAt'])
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.teamId is string
@@ -352,7 +378,7 @@ service cloud.firestore {
           ])
           && request.resource.data.updatedAt == request.time;
       }
-      allow create, update: if request.auth != null
+      allow create, update: if isApprovedCoach()
         && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.createdBy == request.auth.uid
         && validLineup();
       allow delete: if request.auth != null
@@ -367,15 +393,15 @@ service cloud.firestore {
 
       allow read: if request.auth != null && (
         request.auth.uid == playerId
-        || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+        || isApprovedCoach()
       );
       allow create: if request.auth != null && (
         request.auth.uid == playerId
-        || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+        || isApprovedCoach()
       );
       allow update: if request.auth != null && (
         request.auth.uid == playerId
-        || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+        || isApprovedCoach()
       );
 
       allow delete: if false;

@@ -68,9 +68,11 @@ import dev.dreamteam.sportpro.data.model.TeamMember
 import dev.dreamteam.sportpro.domain.access.TeamAccess
 
 @Composable
-fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, onBack: () -> Unit, onEmailInvite: () -> Unit, onOpenTeam: (Team) -> Unit = {}) {
+fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, canUseCoachTools: Boolean, onBack: () -> Unit, onEmailInvite: () -> Unit, onOpenTeam: (Team) -> Unit = {}) {
     val state by viewModel.uiState.collectAsState()
     val owner = TeamAccess.canManage(team, userId)
+    // Invitar, QR y alineaciones exigen aprobación; editar el equipo y su plantilla, no.
+    val approvedOwner = owner && canUseCoachTools
     var tab by remember(team.id) { mutableStateOf(0) }
     var category by remember(team.id) { mutableStateOf(team.categories.firstOrNull().orEmpty()) }
     var editingMember by remember { mutableStateOf<TeamMember?>(null) }
@@ -95,7 +97,9 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
 
     LaunchedEffect(team.id) {
         viewModel.openTeam(team)
-        if (owner && state.joinCode == null) {
+    }
+    LaunchedEffect(team.id, approvedOwner) {
+        if (approvedOwner && state.joinCode == null) {
             viewModel.loadOrCreateJoinCode(team)
         }
     }
@@ -208,7 +212,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
                 }
             }
         }
-        if (owner) {
+        if (approvedOwner) {
             Spacer(Modifier.height(10.dp))
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -246,7 +250,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
         state.managementError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (state.membersLoading) CircularProgressIndicator()
         if (tab == 0) {
-            if (owner) {
+            if (approvedOwner) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onEmailInvite) { Text("Invitar por correo") }
                 }
@@ -277,15 +281,15 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
             Text("FORMACIÓN BASE", style = MaterialTheme.typography.labelMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("4-3-3", "4-4-2", "3-5-2").forEach { item ->
-                    FilterChip(selected = formation == item, onClick = { if (owner) { formation = item; positions = emptyMap() } },
+                    FilterChip(selected = formation == item, onClick = { if (approvedOwner) { formation = item; positions = emptyMap() } },
                         label = { Text(item) })
                 }
             }
-            Text(if (owner) "Toca una posición para asignar un jugador" else "Alineación guardada", style = MaterialTheme.typography.bodySmall)
+            Text(if (approvedOwner) "Toca una posición para asignar un jugador" else "Alineación guardada", style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(10.dp))
-            Pitch(formation, positions, state.members, owner) { selectedSlot = it }
+            Pitch(formation, positions, state.members, approvedOwner) { selectedSlot = it }
             Spacer(Modifier.height(12.dp))
-            if (owner) Button(onClick = { viewModel.saveLineup(team, TeamLineup(category, formation, positions)) },
+            if (approvedOwner) Button(onClick = { viewModel.saveLineup(team, TeamLineup(category, formation, positions)) },
                 enabled = !state.managementBusy && !state.lineupLoading && category.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
                 Text("Guardar alineación")
             }

@@ -58,16 +58,20 @@ class AuthViewModel : ViewModel() {
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
     private val _sessionRoles = MutableStateFlow<Set<AppRole>>(emptySet())
     val sessionRoles: StateFlow<Set<AppRole>> = _sessionRoles.asStateFlow()
-    private val _coachApproved = MutableStateFlow(false)
-    val coachApproved: StateFlow<Boolean> = _coachApproved.asStateFlow()
+    // null mientras se consulta, para no mostrar "pendiente" a un entrenador aprobado.
+    private val _coachApproved = MutableStateFlow<Boolean?>(null)
+    val coachApproved: StateFlow<Boolean?> = _coachApproved.asStateFlow()
     private var coachApprovalListener: ListenerRegistration? = null
     private var pendingName: ProfileName? = null
 
     private fun watchCoachApproval(userId: String) {
         coachApprovalListener?.remove()
-        _coachApproved.value = false
+        _coachApproved.value = null
         coachApprovalListener = firestore.collection("coachApprovals").document(userId)
             .addSnapshotListener { snapshot, error ->
+                if (error == null && snapshot?.metadata?.isFromCache == true && !snapshot.exists()) {
+                    return@addSnapshotListener
+                }
                 _coachApproved.value = error == null && snapshot?.getBoolean("approved") == true
             }
     }
@@ -282,7 +286,7 @@ class AuthViewModel : ViewModel() {
     fun clearSession() {
         coachApprovalListener?.remove()
         coachApprovalListener = null
-        _coachApproved.value = false
+        _coachApproved.value = null
         _sessionRoles.value = emptySet()
         pendingName = null
         resetState()

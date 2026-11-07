@@ -6,6 +6,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import dev.dreamteam.sportpro.data.model.CommunityPost
 import dev.dreamteam.sportpro.data.model.CommunityTeamTarget
+import dev.dreamteam.sportpro.domain.access.COACH_PENDING_MESSAGE
 
 class CommunityRepository {
 
@@ -83,30 +84,41 @@ class CommunityRepository {
         firestore.collection("users").document(user.uid).get()
             .addOnSuccessListener { profile ->
                 val roles = (profile.get("roles") as? List<*>)?.filterIsInstance<String>().orEmpty()
-                val authorRole = roles.firstOrNull { it == "JUGADOR" || it == "ENTRENADOR" }
-                if (authorRole == null) {
-                    onError("Tu perfil no tiene un rol habilitado para publicar")
-                    return@addOnSuccessListener
-                }
+                firestore.collection("coachApprovals").document(user.uid).get()
+                    .addOnCompleteListener { approval ->
+                        val coachApproved = approval.isSuccessful && approval.result?.getBoolean("approved") == true
+                        val authorRole = when {
+                            "ENTRENADOR" in roles && coachApproved -> "ENTRENADOR"
+                            "JUGADOR" in roles -> "JUGADOR"
+                            else -> null
+                        }
+                        if (authorRole == null) {
+                            onError(
+                                if ("ENTRENADOR" in roles) COACH_PENDING_MESSAGE
+                                else "Tu perfil no tiene un rol habilitado para publicar"
+                            )
+                            return@addOnCompleteListener
+                        }
 
-                val authorName = user.displayName
-                    ?: user.email?.substringBefore("@")?.replace(".", " ")?.replaceFirstChar { it.uppercase() }
-                    ?: "Usuario SportPro"
-                val post = hashMapOf<String, Any>(
-                    "authorId" to user.uid,
-                    "authorName" to authorName,
-                    "authorRole" to authorRole,
-                    "content" to content.trim(),
-                    "visibility" to visibility,
-                    "createdAt" to FieldValue.serverTimestamp(),
-                    "active" to true,
-                    "moderated" to false
-                )
-                if (teamId != null) post["teamId"] = teamId
+                        val authorName = user.displayName
+                            ?: user.email?.substringBefore("@")?.replace(".", " ")?.replaceFirstChar { it.uppercase() }
+                            ?: "Usuario SportPro"
+                        val post = hashMapOf<String, Any>(
+                            "authorId" to user.uid,
+                            "authorName" to authorName,
+                            "authorRole" to authorRole,
+                            "content" to content.trim(),
+                            "visibility" to visibility,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "active" to true,
+                            "moderated" to false
+                        )
+                        if (teamId != null) post["teamId"] = teamId
 
-                firestore.collection("communityPosts").add(post)
-                    .addOnSuccessListener { onSuccess() }
-                    .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo publicar") }
+                        firestore.collection("communityPosts").add(post)
+                            .addOnSuccessListener { onSuccess() }
+                            .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo publicar") }
+                    }
             }
             .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo obtener la información del usuario") }
     }
@@ -244,9 +256,18 @@ class CommunityRepository {
             onResult(false)
             return
         }
+        val failure = { _: Exception -> onError("No se pudieron comprobar los permisos de moderación") }
         firestore.collection("moderators").document(uid).get()
-            .addOnSuccessListener { onResult(it.exists()) }
-            .addOnFailureListener { onError("No se pudieron comprobar los permisos de moderación") }
+            .addOnSuccessListener { moderator ->
+                if (moderator.exists()) {
+                    onResult(true)
+                } else {
+                    firestore.collection("admins").document(uid).get()
+                        .addOnSuccessListener { onResult(it.exists()) }
+                        .addOnFailureListener(failure)
+                }
+            }
+            .addOnFailureListener(failure)
     }
 
     fun moderatePost(postId: String, onSuccess: () -> Unit, onError: (String) -> Unit) {

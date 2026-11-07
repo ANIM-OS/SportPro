@@ -31,13 +31,16 @@ enum class RoleCapability {
 
 /** Account-wide UI capabilities derived from profile roles. Firestore enforces writes. */
 object RoleAccess {
-    fun can(roles: Set<AppRole>, capability: RoleCapability, coachApproved: Boolean = true): Boolean = when (capability) {
-        RoleCapability.CREATE_POST -> AppRole.PLAYER in roles || AppRole.COACH in roles
-        RoleCapability.CREATE_TEAM -> AppRole.COACH in roles
-        RoleCapability.JOIN_WITH_CODE -> AppRole.PLAYER in roles
-        RoleCapability.MANAGE_EVENT_CATALOG -> AppRole.COACH in roles
-        RoleCapability.REGISTER_EVENTS -> AppRole.COACH in roles
-        RoleCapability.EDIT_EVENTS -> AppRole.COACH in roles
-        RoleCapability.COMMENT_POST -> roles.isNotEmpty()
+    fun can(roles: Set<AppRole>, capability: RoleCapability, coachApproved: Boolean): Boolean {
+        val approvedCoach = AppRole.COACH in roles && coachApproved
+        return when (capability) {
+            RoleCapability.CREATE_POST -> AppRole.PLAYER in roles || approvedCoach
+            RoleCapability.CREATE_TEAM -> approvedCoach
+            RoleCapability.JOIN_WITH_CODE -> AppRole.PLAYER in roles
+            RoleCapability.MANAGE_EVENT_CATALOG -> approvedCoach
+            RoleCapability.REGISTER_EVENTS -> approvedCoach
+            RoleCapability.EDIT_EVENTS -> approvedCoach
+            RoleCapability.COMMENT_POST -> roles.isNotEmpty()
+        }
     }
 }
