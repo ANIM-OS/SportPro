@@ -1,9 +1,7 @@
 package dev.dreamteam.sportpro.data.repository
 
 import com.google.android.gms.tasks.Task
-import com.google.android.gms.tasks.Tasks
 import com.google.firebase.firestore.*
-import dev.dreamteam.sportpro.BuildConfig
 import dev.dreamteam.sportpro.data.model.MatchLineupEntry
 import dev.dreamteam.sportpro.ui.callups.CallupMatch
 
@@ -26,11 +24,9 @@ class MatchLineupRepository {
             })
         }
     fun formation(match: CallupMatch, formation: String): Task<Void> {
-        if (!BuildConfig.LOCAL_FIREBASE) return denied()
         return lineup(match.id).set(mapOf("teamId" to match.teamId, "formation" to formation, "updatedAt" to FieldValue.serverTimestamp()))
     }
     fun assign(match: CallupMatch, formation: String, playerId: String, kind: String, position: String): Task<Void> {
-        if (!BuildConfig.LOCAL_FIREBASE) return denied()
         return db.runTransaction { tx ->
             val ref = lineup(match.id)
             val parent = tx.get(ref)
@@ -53,7 +49,6 @@ class MatchLineupRepository {
         }
     }
     fun remove(matchId: String, playerId: String): Task<Void> {
-        if (!BuildConfig.LOCAL_FIREBASE) return denied()
         return db.runTransaction { tx ->
             val ref = lineup(matchId).collection("players").document(playerId)
             val old = tx.get(ref)
@@ -62,5 +57,4 @@ class MatchLineupRepository {
             null
         }
     }
-    private fun denied(): Task<Void> = Tasks.forException(IllegalStateException("Función en pruebas locales"))
 }

@@ -35,14 +35,14 @@ internal fun AvailabilityActions(row: PlayerCallup, match: CallupMatch?) {
     val open = row.selected && match != null && now < match.responseDeadline.toDate().time && now < match.kickoff.toDate().time
     Text("Disponibilidad: ${statusLabel(response?.status)}")
     response?.let { Text(if (it.respondedBy == row.playerId) "Respondió el jugador" else "Respondió un padre o tutor autorizado") }
-    match?.let { Text("Cierre: ${dateLabel(it.responseDeadline.toDate().time)}") }
+    match?.let { Text("Fecha límite para responder: ${dateLabel(it.responseDeadline.toDate().time)} (hora local)") }
     if (row.selected && match != null && !open) Text("El plazo para responder está cerrado.")
     if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
     val submit: (Boolean) -> Unit = { available ->
         busy = true; error = null; message = null
         repository.respond(row, available)
             .addOnSuccessListener { message = "Respuesta guardada" }
-            .addOnFailureListener { error = "No se pudo guardar. Comprueba el cierre y tu autorización e inténtalo de nuevo." }
+            .addOnFailureListener { error = "No se pudo guardar. Comprueba el plazo para responder y tu autorización e inténtalo de nuevo." }
             .addOnCompleteListener { busy = false }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -80,9 +80,31 @@ internal fun GuardianCallups(repository: CallupRepository) {
     var links by remember { mutableStateOf<List<GuardianLink>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
-    Text("Convocatorias de mis jugadores", style = MaterialTheme.typography.titleLarge)
-    if (FirebaseAuth.getInstance().currentUser?.isEmailVerified != true) {
-        Text("Verifica tu correo y vuelve a iniciar sesión para consultar a los jugadores vinculados.")
+    val user = FirebaseAuth.getInstance().currentUser
+    var verified by remember(user?.uid) { mutableStateOf(user?.isEmailVerified == true) }
+    var checking by remember { mutableStateOf(false) }
+    var verificationMessage by remember { mutableStateOf<String?>(null) }
+    Text("Como padre o tutor", style = MaterialTheme.typography.titleLarge)
+    if (!verified) {
+        Text("Verifica tu correo para consultar las convocatorias de tus jugadores vinculados.")
+        TextButton(enabled = !checking && user != null, onClick = {
+            checking = true; verificationMessage = null
+            user?.sendEmailVerification()
+                ?.addOnSuccessListener { verificationMessage = "Enlace enviado a ${user.email}. Revisa también el correo no deseado." }
+                ?.addOnFailureListener { verificationMessage = "No se pudo enviar el enlace. Inténtalo de nuevo más tarde." }
+                ?.addOnCompleteListener { checking = false }
+        }) { Text("Enviar enlace de verificación") }
+        OutlinedButton(enabled = !checking && user != null, onClick = {
+            checking = true; verificationMessage = null
+            user?.reload()?.addOnSuccessListener {
+                user.getIdToken(true).addOnSuccessListener {
+                    verified = user.isEmailVerified
+                    if (!verified) verificationMessage = "El correo aún no está verificado. Abre el enlace recibido y vuelve a comprobar."
+                    checking = false
+                }.addOnFailureListener { checking = false; verificationMessage = "No se pudo actualizar la sesión." }
+            }?.addOnFailureListener { checking = false; verificationMessage = "No se pudo comprobar la verificación." }
+        }) { Text(if (checking) "Comprobando…" else "Ya verifiqué mi correo") }
+        verificationMessage?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
         return
     }
     DisposableEffect(profiles) {

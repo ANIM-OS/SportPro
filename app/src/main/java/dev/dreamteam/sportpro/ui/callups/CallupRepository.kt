@@ -5,7 +5,6 @@ import com.google.android.gms.tasks.Tasks
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.*
-import dev.dreamteam.sportpro.BuildConfig
 
 /** Shared encounter identity; independent from the demo match screens. */
 data class CallupMatch(val id: String, val teamId: String, val category: String, val opponent: String, val kickoff: Timestamp, val responseDeadline: Timestamp = kickoff, val ownerId: String = "")
@@ -43,7 +42,6 @@ class CallupRepository {
             else change(snapshot?.documents.orEmpty().mapNotNull(::selection))
         }
     fun saveMatch(existing: CallupMatch?, teamId: String, category: String, opponent: String, kickoff: Long, deadline: Long = kickoff): Task<Void> {
-        if (!BuildConfig.LOCAL_FIREBASE) return Tasks.forException(IllegalStateException("Publicación pendiente de habilitar"))
         if (opponent.isBlank() || opponent.trim().length > 100 || kickoff <= System.currentTimeMillis() || deadline <= System.currentTimeMillis() || deadline > kickoff)
             return Tasks.forException(IllegalArgumentException("El cierre debe ser futuro y no posterior al partido"))
         val data = mapOf("teamId" to teamId, "ownerId" to uid, "category" to category,
@@ -65,7 +63,6 @@ class CallupRepository {
     }
     /** Each player's update is independently validated. A retry converges to the requested selection. */
     fun saveSelections(match: CallupMatch, selected: Set<String>, previous: List<PlayerCallup>): Task<Void> {
-        if (!BuildConfig.LOCAL_FIREBASE) return Tasks.forException(IllegalStateException("Publicación pendiente de habilitar"))
         val targets = selected + previous.filter { it.selected }.map { it.playerId }
         val writes = targets.map { player ->
             val ref = selections.document("${match.id}_$player")

@@ -4,7 +4,6 @@ import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.*
-import dev.dreamteam.sportpro.BuildConfig
 
 data class AvailabilityResponse(val selectionId: String, val playerId: String, val status: String, val respondedBy: String)
 
@@ -24,7 +23,6 @@ class AvailabilityRepository {
         }
     }
     fun respond(row: PlayerCallup, available: Boolean): Task<Void> {
-        if (!BuildConfig.LOCAL_FIREBASE) return Tasks.forException(IllegalStateException("Función en pruebas locales"))
         val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return Tasks.forException(IllegalStateException("Inicia sesión"))
         // Server rules re-read the active selection, current membership and authoritative deadline.
         return responses.document(row.id).set(mapOf(

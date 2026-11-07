@@ -99,26 +99,25 @@ El código fuente, diseño y documentación del proyecto no pueden ser copiados,
 
 Actualmente el proyecto no se encuentra abierto a contribuciones externas.
 
-## Prueba local de US-09 (sin publicar en Firebase)
+## US-09 y US-10 en SportPro
 
-La variante `local` instala **SportPro Local** con un identificador diferente. Utiliza
-únicamente el proyecto ficticio `demo-sportpro` y los emuladores de Authentication y
-Firestore. Las variantes normales mantienen la nueva función deshabilitada hasta
-revisar e integrar las reglas publicadas; este cambio no debe desplegarse automáticamente.
+Convocatorias, disponibilidad y alineaciones por partido se abren desde
+**Equipos → Convocatorias por partido** en la app SportPro habitual.
+En Android Studio selecciona la variante **debug** y ejecuta la app. No existe
+una variante ni una aplicación separada «SportPro Local».
+La app usa la configuración existente de `app/google-services.json` y las cuentas,
+equipos y jugadores del Firebase compartido; no se copian datos de los emuladores.
 
-1. Abre un emulador Android y ejecuta `scripts/start-callups-local.command` (doble clic en macOS).
-   Mantén esa ventana abierta. Se necesita Java de Android Studio y Node/npm; el script
-   contempla las rutas del entorno de desarrollo actual. La primera ejecución descarga Firebase CLI.
-2. Ejecuta `scripts/prepare-callups-local.command`. Conecta los puertos mediante ADB,
-   prueba las reglas y crea datos ficticios locales. Solo modifica los registros de prueba
-   con identificadores `local-team` y `local-match` y las cuentas indicadas abajo.
-3. En Android Studio abre **Build Variants**, elige `local` para `app` y ejecuta.
-4. Inicia sesión por correo con `entrenador@sportpro.test` o `jugador@sportpro.test`.
-   Ambas cuentas de prueba usan `SportProLocal2026!` (solo emuladores).
-5. En **Equipos → Convocatorias**, el entrenador selecciona equipo y partido, marca
-   jugadores de la categoría y guarda. Puede registrar un partido o editar rival y horario.
-   El jugador ve su estado en **Mis convocatorias**, incluidos los retiros.
-6. La base de pruebas está en http://127.0.0.1:4000/firestore. No contiene datos del proyecto real.
+El entrenador selecciona equipo y partido, marca jugadores de la categoría y guarda.
+Puede registrar el partido y ajustar la fecha límite sugerida para las respuestas.
+El jugador o tutor autorizado confirma su disponibilidad antes de ese límite.
+
+**Pendiente de integración en Firebase:** revisar y publicar, con autorización del
+responsable, las reglas de `firestore.rules` para `matchFixtures`,
+`matchCallupPlayers`, `matchAvailability` y `matchLineups`. Habilitar las pantallas
+no concede permisos en el servidor: si las reglas publicadas no permiten estas
+operaciones, Firebase las rechazará. No desplegar automáticamente ni crear datos
+ficticios en el proyecto compartido.
 
 Los partidos se guardan en `matchFixtures`; cada selección, en `matchCallupPlayers`,
 con identidad estable de partido y jugador. El rival se introduce únicamente al registrar
@@ -130,12 +129,12 @@ Cada selección se guarda con una transacción independiente: si alguna falla, s
 posible guardado parcial y se permite reintentar; no se promete atomicidad de toda la lista.
 Los borradores antiguos del dispositivo no se migran ni se eliminan.
 
-Las reglas nuevas están añadidas solo a las colecciones de US-09. Antes de un despliegue real,
+Las reglas de estas historias están incluidas en `firestore.rules`. Antes de un despliegue real,
 se deben reconciliar con las reglas actualmente publicadas y acordar con el equipo la fuente
 común de partidos. Las pantallas de demostración de otras historias no se modifican aquí.
 
 
-## US-11: alineación por partido (variante local)
+## US-11: alineación por partido
 
 Depende de las convocatorias de US-09. US-10 aporta el estado de disponibilidad como
 referencia: no responder no excluye al jugador y no se impide al entrenador alinear
@@ -166,15 +165,17 @@ Retirar a un jugador de la convocatoria también retira su asignación en la mis
 transacción. Si cambia su categoría o membresía desde otro módulo, la pantalla avisa
 que su asignación ya no es válida y permite retirarla; no altera ese otro módulo.
 
-`tests/callups/lineup-check.mjs` ejecuta las pruebas encadenadas de US-09, US-10 y US-11,
-incluidas dos alineaciones independientes, once titulares y un suplente, escrituras
-simultáneas y conservación de la alineación general. El script de preparación local
-ahora ejecuta esta suite y deja ese ejemplo listo. Cuenta adicional para US-10:
-`tutor@sportpro.test`, con la misma contraseña local y vínculo verificado al jugador.
-Los registros que prepara y reinicia la suite son exclusivamente de `demo-sportpro`.
+## Pruebas aisladas de Firebase
 
-No se han desplegado estas reglas al proyecto compartido. Las funciones de US-09 a
-US-11 continúan deshabilitadas en las variantes normales hasta revisar las reglas
-publicadas y autorizar su puesta en marcha. No ejecutar `firebase deploy` como parte
-de estas pruebas. Los scripts locales conservan los datos al cerrar limpiamente
-los emuladores; la suite vuelve a preparar sus registros de prueba al ejecutarse.
+Los emuladores se conservan únicamente para las pruebas automatizadas de reglas;
+no son una variante de la aplicación ni se necesitan para abrir SportPro.
+
+1. Ejecuta `scripts/start-callups-local.command` y mantén la ventana abierta.
+2. Ejecuta `scripts/prepare-callups-local.command` para correr la suite.
+
+`tests/callups/lineup-check.mjs` encadena las comprobaciones de US-09, US-10 y US-11,
+incluidas autorizaciones, persistencia, fechas límite, alineaciones independientes,
+escrituras simultáneas y conservación de la alineación general.
+Solo utiliza `demo-sportpro` en localhost; sus cuentas y datos ficticios no funcionan
+en SportPro ni se migran al Firebase compartido. La interfaz de los datos de prueba
+está en http://127.0.0.1:4000/firestore. No ejecutar `firebase deploy` para estas pruebas.

@@ -16,19 +16,11 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
-        buildConfigField("boolean", "LOCAL_FIREBASE", "false")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
-        create("local") {
-            initWith(getByName("debug"))
-            matchingFallbacks += listOf("debug")
-            applicationIdSuffix = ".local"
-            versionNameSuffix = "-local"
-            buildConfigField("boolean", "LOCAL_FIREBASE", "true")
-        }
         release {
             optimization {
                 enable = false
