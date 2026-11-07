@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -28,6 +29,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -50,6 +52,16 @@ fun CommunityScreen(
     viewModel: CommunityViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val listState = rememberLazyListState()
+
+    // Tras publicar, la lista conserva la publicación que se estaba viendo y la
+    // nueva queda arriba, fuera de pantalla; se sube solo después de publicar.
+    LaunchedEffect(uiState.scrollToTopRequested, uiState.posts.firstOrNull()?.id) {
+        if (uiState.scrollToTopRequested && uiState.posts.isNotEmpty()) {
+            listState.animateScrollToItem(0)
+            viewModel.onScrolledToTop()
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -152,6 +164,7 @@ fun CommunityScreen(
 
                 else -> {
                     LazyColumn(
+                        state = listState,
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {

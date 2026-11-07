@@ -37,6 +37,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -53,6 +55,7 @@ import dev.dreamteam.sportpro.ui.auth.AppRole
 import dev.dreamteam.sportpro.ui.auth.RoleAccess
 import dev.dreamteam.sportpro.ui.auth.RoleCapability
 import dev.dreamteam.sportpro.ui.community.CommunityScreen
+import dev.dreamteam.sportpro.ui.community.CommunityViewModel
 import dev.dreamteam.sportpro.ui.community.CreatePostScreen
 import dev.dreamteam.sportpro.ui.community.PostCommentsScreen
 import dev.dreamteam.sportpro.ui.events.EventCatalogEditScreen
@@ -406,12 +409,20 @@ fun SportProNavGraph(
                 )
             }
 
-            composable(SportProRoute.CreatePost.route) {
+            composable(SportProRoute.CreatePost.route) { entry ->
+                // Mismo ViewModel que Comunidad: un solo juego de listeners y la
+                // lista sabe cuándo se publicó para volver arriba.
+                val communityEntry = remember(entry) {
+                    runCatching { navController.getBackStackEntry(SportProRoute.Community.route) }.getOrDefault(entry)
+                }
                 RoleGate(roles, RoleCapability.CREATE_POST, isCoachApproved) {
                     CreatePostScreen(
+                        // Solo quita el formulario: si el usuario ya salió mientras se
+                        // publicaba, la confirmación no debe sacarlo también de Comunidad.
                         onBack = {
-                            navController.popBackStack()
-                        }
+                            navController.popBackStack(SportProRoute.CreatePost.route, inclusive = true)
+                        },
+                        viewModel = viewModel<CommunityViewModel>(viewModelStoreOwner = communityEntry)
                     )
                 }
             }

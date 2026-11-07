@@ -2,6 +2,7 @@ package dev.dreamteam.sportpro.data.repository
 
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import dev.dreamteam.sportpro.data.model.CommunityPost
@@ -159,7 +160,7 @@ class CommunityRepository {
                         content = document.getString("content") ?: "",
                         visibility = document.getString("visibility") ?: "TODOS",
                         teamId = document.getString("teamId"),
-                        createdAt = document.getTimestamp("createdAt"),
+                        createdAt = document.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
                         active = document.getBoolean("active") ?: true,
                         moderated = document.getBoolean("moderated") ?: false
                     )
@@ -200,7 +201,7 @@ class CommunityRepository {
                                         content = document.getString("content") ?: "",
                                         visibility = document.getString("visibility") ?: "TODOS",
                                         teamId = document.getString("teamId"),
-                                        createdAt = document.getTimestamp("createdAt"),
+                                        createdAt = document.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
                                         active = document.getBoolean("active") ?: true,
                                         moderated = document.getBoolean("moderated") ?: false
                                     )
