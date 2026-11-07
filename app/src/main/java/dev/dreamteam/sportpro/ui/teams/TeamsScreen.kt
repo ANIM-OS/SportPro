@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -52,7 +53,7 @@ fun TeamsScreen(
 ) {
     var showCallupDraft by remember { mutableStateOf(false) }
     if (showCallupDraft && (canCreateTeam || canJoinWithCode || canRespondAsGuardian)) {
-        dev.dreamteam.sportpro.ui.callups.CallupsScreen(canManage = canCreateTeam, isGuardian = canRespondAsGuardian, onBack = { showCallupDraft = false })
+        dev.dreamteam.sportpro.ui.callups.CallupsScreen(canManage = canCreateTeam, isGuardian = canRespondAsGuardian, isPlayer = canJoinWithCode, onBack = { showCallupDraft = false })
         return
     }
     val uiState by viewModel.uiState.collectAsState()
@@ -203,9 +204,6 @@ fun TeamsScreen(
             .background(MaterialTheme.colorScheme.background)
             .padding(16.dp)
     ) {
-        if (canCreateTeam || canJoinWithCode || canRespondAsGuardian) {
-            OutlinedButton(onClick = { showCallupDraft = true }) { Text("Convocatorias") }
-        }
         // Top Header
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -213,9 +211,10 @@ fun TeamsScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = if (canCreateTeam) "MIS EQUIPOS Y ACADEMIAS" else "EQUIPOS",
+                text = if (canCreateTeam) "Mis equipos y academias" else "Equipos",
                 color = MaterialTheme.colorScheme.onBackground,
-                fontSize = 22.sp,
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.weight(1f),
                 fontWeight = FontWeight.Bold
             )
 
@@ -229,6 +228,38 @@ fun TeamsScreen(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+
+        if (canCreateTeam || canJoinWithCode || canRespondAsGuardian) {
+            Card(
+                onClick = { showCallupDraft = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Convocatorias por partido", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (canCreateTeam) "Convoca jugadores, consulta sus respuestas y arma la alineación."
+                            else if (canRespondAsGuardian) "Consulta los partidos y confirma la asistencia de tus jugadores."
+                            else "Consulta tus partidos y confirma si puedes asistir.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            if (canCreateTeam) "Gestionar convocatorias" else "Ver convocatorias",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         if (!canCreateTeam && !uiState.emailVerified) {
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -342,11 +373,11 @@ fun TeamsScreen(
                                     onClick = onCreateTeamClick,
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                                     shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
                                 ) {
-                                    Icon(imageVector = Icons.Default.Add, contentDescription = null, tint = Color.White)
+                                    Icon(imageVector = Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary)
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Crear Equipo o Academia", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    Text("Crear equipo o academia", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                                 }
                             }
                         } else {
@@ -366,21 +397,20 @@ fun TeamsScreen(
                             onClick = onCreateTeamClick,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(52.dp),
+                                .heightIn(min = 52.dp),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Add,
                                 contentDescription = null,
-                                tint = Color.White
+                                tint = MaterialTheme.colorScheme.onPrimary
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Crear Equipo o Academia",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp
+                                text = "Crear equipo o academia",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                         Spacer(modifier = Modifier.height(16.dp))
@@ -391,6 +421,7 @@ fun TeamsScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TeamCard(
     team: Team,
@@ -404,9 +435,8 @@ fun TeamCard(
     isDeleting: Boolean,
     onManage: () -> Unit
 ) {
-    val isAcademy = team.type == "ACADEMIA"
-    val badgeColor = if (isAcademy) Color(0xFFFFCC00) else MaterialTheme.colorScheme.primary
-    val textColor = if (isAcademy) Color.Black else Color.White
+    val badgeColor = MaterialTheme.colorScheme.secondaryContainer
+    val textColor = MaterialTheme.colorScheme.onSecondaryContainer
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -441,10 +471,10 @@ fun TeamCard(
                         Text(
                             text = team.name,
                             color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = 17.sp,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.weight(1f),
-                            maxLines = 1
+                            maxLines = 3
                         )
 
                         Surface(
@@ -455,7 +485,7 @@ fun TeamCard(
                                 text = team.type,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 color = textColor,
-                                fontSize = 9.sp,
+                                style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -465,7 +495,7 @@ fun TeamCard(
                         Text(
                             text = "📍 ${team.city}",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 12.sp
+                            style = MaterialTheme.typography.bodyMedium
                         )
                     }
 
@@ -473,7 +503,7 @@ fun TeamCard(
                         Text(
                             text = team.description,
                             color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = 12.sp,
+                            style = MaterialTheme.typography.bodyMedium,
                             maxLines = 2
                         )
                     }
@@ -481,9 +511,10 @@ fun TeamCard(
             }
 
             // Categories pills
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 team.categories.forEach { category ->
                     Surface(
@@ -494,7 +525,7 @@ fun TeamCard(
                             text = category,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 10.sp,
+                            style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Medium
                         )
                     }
@@ -505,26 +536,36 @@ fun TeamCard(
 
             Button(
                 onClick = onManage,
-                modifier = Modifier.fillMaxWidth().height(42.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
             ) {
-                Text("Plantilla y alineación", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                Text("Plantilla y alineación general", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
             }
 
             if (canManage) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (canInvite) {
-                        TextButton(onClick = onInvite, contentPadding = PaddingValues(0.dp)) { Text("Invitar", fontSize = 12.sp) }
+                        OutlinedButton(onClick = onInvite, enabled = !isDeleting,
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) {
+                            Text("Invitar", style = MaterialTheme.typography.labelLarge)
+                        }
                     }
-                    TextButton(onClick = onPhoto, enabled = !isUploadingPhoto && !isDeleting, contentPadding = PaddingValues(0.dp)) {
-                        Text(if (isUploadingPhoto) "Subiendo…" else "Cambiar foto", fontSize = 12.sp)
+                    OutlinedButton(onClick = onPhoto, enabled = !isUploadingPhoto && !isDeleting,
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) {
+                        Text(if (isUploadingPhoto) "Subiendo…" else "Cambiar foto", style = MaterialTheme.typography.labelLarge)
                     }
-                    TextButton(onClick = onEdit, enabled = !isDeleting, contentPadding = PaddingValues(0.dp)) { Text("Editar", fontSize = 12.sp) }
-                    TextButton(onClick = onDelete, enabled = !isDeleting, contentPadding = PaddingValues(0.dp)) { Text("Eliminar", color = Color(0xFFFF5252), fontSize = 12.sp) }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onEdit, enabled = !isDeleting,
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) {
+                        Text("Editar", style = MaterialTheme.typography.labelLarge)
+                    }
+                    OutlinedButton(onClick = onDelete, enabled = !isDeleting,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) {
+                        Text("Eliminar", style = MaterialTheme.typography.labelLarge)
+                    }
                 }
             }
         }
@@ -563,7 +604,7 @@ fun TeamPhoto(team: Team, onPhoto: (() -> Unit)? = null, canClick: Boolean = fal
             Text(
                 text = team.name.take(2).uppercase(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 22.sp,
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
         }

@@ -1,6 +1,0 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
-    <application android:usesCleartextTraffic="true" android:label="SportPro Local" tools:replace="android:label">
-        <activity android:name="dev.dreamteam.sportpro.MainActivity" android:label="SportPro Local" tools:replace="android:label" />
-        <meta-data android:name="firebase_analytics_collection_deactivated" android:value="true" />
-    </application>
-</manifest>
