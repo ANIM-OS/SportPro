@@ -47,7 +47,7 @@ await set(`coachApprovals/${coach.id}`,{approved:true});
 await set('teams/local-team',{name:'Equipo de prueba Brayan',type:'EQUIPO',createdBy:coach.id,categories:['SUB-17','SUB-15']});
 await set(`teamMemberships/local-team_${player.id}`,{teamId:'local-team',userId:player.id,playerName:'Jugador de prueba',category:'SUB-17'});
 await set(`teamMemberships/local-team_${wrongCategory.id}`,{teamId:'local-team',userId:wrongCategory.id,playerName:'Jugador Sub-15',category:'SUB-15'});
-for (const id of ['local-match','forbidden-match','past-match','wrong-category']) {
+for (const id of ['local-match','forbidden-match','past-match','wrong-category','lineup-other','atomic-match']) {
   await request(`${root}/matchFixtures/${id}`,undefined,'owner','DELETE');
 }
 const fixture = {teamId:'local-team',ownerId:coach.id,category:'SUB-17',opponent:'Rival de prueba',kickoff:new Date(Date.now()+86400000)};
@@ -56,6 +56,15 @@ expect(await set('matchFixtures/local-match',fixture,coach.token,true),200,'coac
 expect(await set('matchFixtures/forbidden-match',{...fixture,ownerId:other.id},other.token,true),403,'outsider cannot create fixture');
 expect(await set('matchFixtures/past-match',{...fixture,kickoff:new Date(0)},coach.token,true),403,'past fixture rejected');
 expect(await set('matchFixtures/wrong-category',{...fixture,category:'INVALID'},coach.token,true),403,'unknown team category rejected');
+expect(await set('matchFixtures/atomic-match',fixture,coach.token,true),200,'atomic test fixture created');
+const atomicWrite = (path, data) => ({update:{name:`projects/${project}/databases/(default)/documents/${path}`,fields:fields(data)},updateTransforms:[{fieldPath:'updatedAt',setToServerValue:'REQUEST_TIME'}]});
+const atomicSelection = p => ({teamId:'local-team',ownerId:coach.id,matchId:'atomic-match',playerId:p.id,selected:true});
+expect(await request(`${root}:commit`,{writes:[
+  atomicWrite(`matchCallupPlayers/atomic-match_${player.id}`,atomicSelection(player)),
+  atomicWrite(`matchCallupPlayers/atomic-match_${wrongCategory.id}`,atomicSelection(wrongCategory))
+]},coach.token),403,'invalid recipient rejects the entire batch');
+expect(await request(`${root}/matchCallupPlayers/atomic-match_${player.id}`,undefined,'owner','GET'),404,'valid recipient was not partially saved');
+await request(`${root}/matchFixtures/atomic-match`,undefined,'owner','DELETE');
 const selection = p => ({teamId:'local-team',ownerId:coach.id,matchId:'local-match',playerId:p.id,selected:true});
 expect(await set(`matchCallupPlayers/local-match_${player.id}`,selection(player),coach.token,true),200,'coach selects team player');
 expect(await set(`matchCallupPlayers/local-match_${wrongCategory.id}`,selection(wrongCategory),coach.token,true),403,'wrong category rejected');

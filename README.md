@@ -67,9 +67,9 @@ El proyecto se encuentra actualmente en etapa de prototipo. Algunas funcionalida
 
 Próximos objetivos:
 
-* [ ] Integrar Firebase Authentication.
-* [ ] Implementar inicio de sesión con Google.
-* [ ] Implementar Firestore.
+* [x] Integrar Firebase Authentication.
+* [x] Implementar inicio de sesión con Google.
+* [x] Implementar Firestore para los módulos persistidos.
 * [ ] Completar el sistema de roles y permisos.
 * [ ] Completar la gestión de equipos y jugadores.
 * [ ] Desarrollar estadísticas.
@@ -112,12 +112,13 @@ El entrenador selecciona equipo y partido, marca jugadores de la categoría y gu
 Puede registrar el partido y ajustar la fecha límite sugerida para las respuestas.
 El jugador o tutor autorizado confirma su disponibilidad antes de ese límite.
 
-**Pendiente de integración en Firebase:** revisar y publicar, con autorización del
-responsable, las reglas de `firestore.rules` para `matchFixtures`,
-`matchCallupPlayers`, `matchAvailability` y `matchLineups`. Habilitar las pantallas
-no concede permisos en el servidor: si las reglas publicadas no permiten estas
-operaciones, Firebase las rechazará. No desplegar automáticamente ni crear datos
-ficticios en el proyecto compartido.
+Las reglas de US-09, US-10 y US-11 se comprobaron y esta versión de
+`firestore.rules` se publicó en `sportpro-6f6ad` el 21 de noviembre de 2026.
+Antes de cambiarlas de nuevo, compara la versión publicada con el repositorio.
+La pestaña **Partidos** y
+**Equipos → Convocatorias por partido** leen los mismos documentos `matchFixtures`.
+El marcador y los eventos todavía no tienen persistencia; la app no muestra
+marcadores ni cronologías ficticias como si fueran reales.
 
 Los partidos se guardan en `matchFixtures`; cada selección, en `matchCallupPlayers`,
 con identidad estable de partido y jugador. El rival se introduce únicamente al registrar
@@ -125,13 +126,17 @@ el partido; en la convocatoria todos los datos se seleccionan o se muestran auto
 La categoría de un partido guardado es inmutable para no invalidar las convocatorias existentes.
 Las escrituras validan propiedad del equipo, rol, membresía, categoría y fecha futura.
 La retirada se conserva como estado visible para el jugador. Las actualizaciones usan listeners.
-Cada selección se guarda con una transacción independiente: si alguna falla, se informa de un
-posible guardado parcial y se permite reintentar; no se promete atomicidad de toda la lista.
+Los cambios de una convocatoria se guardan en una sola transacción: si una
+selección falla, ninguna de esa edición se aplica. Para respetar el límite de
+lecturas de las reglas de Firestore, se pueden guardar hasta 15 altas o 5
+retiros por vez; después se continúa con el resto. Cambiar la categoría de un
+jugador o retirarlo del equipo requiere quitarlo antes de sus convocatorias futuras.
+Al eliminar un equipo, la app elimina también sus partidos, convocatorias,
+respuestas de disponibilidad y alineaciones por partido.
 Los borradores antiguos del dispositivo no se migran ni se eliminan.
 
-Las reglas de estas historias están incluidas en `firestore.rules`. Antes de un despliegue real,
-se deben reconciliar con las reglas actualmente publicadas y acordar con el equipo la fuente
-común de partidos. Las pantallas de demostración de otras historias no se modifican aquí.
+Las reglas de estas historias están incluidas en `firestore.rules`. Los módulos
+de eventos US-12 a US-15 todavía requieren su propia integración de datos.
 
 
 ## US-11: alineación por partido

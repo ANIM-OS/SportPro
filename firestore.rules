@@ -17,9 +17,12 @@ service cloud.firestore {
     }
 
     // US-09. New collections only; existing team and community rules stay intact.
-    function callupOwnsTeam(teamId) {
-      return isApprovedCoach()
+    function ownsCallupTeam(teamId) {
+      return request.auth != null
         && get(/databases/$(database)/documents/teams/$(teamId)).data.createdBy == request.auth.uid;
+    }
+    function callupOwnsTeam(teamId) {
+      return isApprovedCoach() && ownsCallupTeam(teamId);
     }
     function callupMember(teamId, playerId, category) {
       let member = get(/databases/$(database)/documents/teamMemberships/$(teamId + '_' + playerId)).data;
@@ -27,7 +30,7 @@ service cloud.firestore {
     }
     match /matchFixtures/{matchId} {
       allow read: if request.auth != null && (
-        callupOwnsTeam(resource.data.teamId)
+        ownsCallupTeam(resource.data.teamId)
         || callupMember(resource.data.teamId, request.auth.uid, resource.data.category)
       );
       function validFixture() {
@@ -50,7 +53,7 @@ service cloud.firestore {
       allow update: if request.auth != null && validFixture()
         && resource.data.get('responseDeadline', resource.data.kickoff) > request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['opponent', 'kickoff', 'responseDeadline', 'updatedAt']);
-      allow delete: if false;
+      allow delete: if ownsCallupTeam(resource.data.teamId);
     }
     match /matchCallupPlayers/{selectionId} {
       allow read: if request.auth != null && (
@@ -84,7 +87,7 @@ service cloud.firestore {
       allow create: if request.auth != null && validSelection();
       allow update: if request.auth != null && validSelection()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['selected', 'encounter', 'updatedAt']);
-      allow delete: if false;
+      allow delete: if ownsCallupTeam(resource.data.teamId);
     }
 
 
@@ -94,7 +97,7 @@ service cloud.firestore {
     }
     function canReadMatchLineup(matchId) {
       let fixture = lineupFixture(matchId);
-      return request.auth != null && (callupOwnsTeam(fixture.teamId)
+      return request.auth != null && (ownsCallupTeam(fixture.teamId)
         || callupMember(fixture.teamId, request.auth.uid, fixture.category));
     }
     function canWriteMatchLineup(matchId) {
@@ -112,7 +115,7 @@ service cloud.firestore {
         && request.resource.data.teamId == lineupFixture(matchId).teamId
         && request.resource.data.formation in ['4-3-3','4-4-2','3-5-2']
         && request.resource.data.updatedAt == request.time;
-      allow delete: if false;
+      allow delete: if ownsCallupTeam(lineupFixture(matchId).teamId);
       match /players/{playerId} {
         allow read: if canReadMatchLineup(matchId);
         function validAssignment() {
@@ -134,7 +137,7 @@ service cloud.firestore {
             && d.updatedAt == request.time;
         }
         allow create, update: if canWriteMatchLineup(matchId) && validAssignment();
-        allow delete: if canWriteMatchLineup(matchId) && (resource.data.kind != 'STARTER'
+        allow delete: if ownsCallupTeam(lineupFixture(matchId).teamId) && (resource.data.kind != 'STARTER'
           || !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/slots/$(resource.data.position)));
       }
       match /slots/{position} {
@@ -152,7 +155,7 @@ service cloud.firestore {
             && d.updatedAt == request.time;
         }
         allow create, update: if canWriteMatchLineup(matchId) && validSlot();
-        allow delete: if canWriteMatchLineup(matchId) && (
+        allow delete: if ownsCallupTeam(lineupFixture(matchId).teamId) && (
           !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId))
           || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.kind != 'STARTER'
           || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.position != position);
@@ -173,9 +176,9 @@ service cloud.firestore {
     match /matchAvailability/{selectionId} {
       allow get: if request.auth != null && (
         availabilityActor(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.playerId)
-        || callupOwnsTeam(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.teamId));
+        || ownsCallupTeam(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.teamId));
       allow list: if request.auth != null && resource.data.ownerId == request.auth.uid
-        && callupOwnsTeam(resource.data.teamId);
+        && ownsCallupTeam(resource.data.teamId);
       function validResponse() {
         let d = request.resource.data;
         let selection = get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data;
@@ -197,7 +200,7 @@ service cloud.firestore {
       allow create: if request.auth != null && validResponse();
       allow update: if request.auth != null && validResponse()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedBy', 'updatedAt']);
-      allow delete: if false;
+      allow delete: if ownsCallupTeam(resource.data.teamId);
     }
 
     // =========================

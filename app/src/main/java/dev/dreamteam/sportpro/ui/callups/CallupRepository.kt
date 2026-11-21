@@ -6,9 +6,14 @@ import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.*
 
-/** Shared encounter identity; independent from the demo match screens. */
+/** Shared encounter identity for Partidos, convocatorias, disponibilidad and lineups. */
 data class CallupMatch(val id: String, val teamId: String, val category: String, val opponent: String, val kickoff: Timestamp, val responseDeadline: Timestamp = kickoff, val ownerId: String = "")
 data class PlayerCallup(val id: String, val matchId: String, val teamId: String, val playerId: String, val selected: Boolean, val encounter: CallupMatch? = null, val ownerId: String = "")
+
+internal const val MAX_CALLUP_WRITE_COST = 15
+internal fun callupWriteCost(selected: Set<String>, saved: Set<String>): Int =
+    (selected - saved).size + 3 * (saved - selected).size
+internal const val CALLUP_WRITE_LIMIT_MESSAGE = "Guarda primero estos cambios para continuar: hasta 15 altas o 5 retiros por guardado."
 
 class CallupRepository {
     private val db = FirebaseFirestore.getInstance()
@@ -44,6 +49,8 @@ class CallupRepository {
     fun saveMatch(existing: CallupMatch?, teamId: String, category: String, opponent: String, kickoff: Long, deadline: Long = kickoff): Task<Void> {
         if (opponent.isBlank() || opponent.trim().length > 100 || kickoff <= System.currentTimeMillis() || deadline <= System.currentTimeMillis() || deadline > kickoff)
             return Tasks.forException(IllegalArgumentException("El cierre debe ser futuro y no posterior al partido"))
+        if (existing != null && existing.responseDeadline.toDate().time <= System.currentTimeMillis())
+            return Tasks.forException(IllegalStateException("El plazo de respuesta terminó; este partido ya no se puede editar"))
         val data = mapOf("teamId" to teamId, "ownerId" to uid, "category" to category,
             "opponent" to opponent.trim(), "kickoff" to Timestamp(java.util.Date(kickoff)),
             "responseDeadline" to Timestamp(java.util.Date(deadline)), "updatedAt" to FieldValue.serverTimestamp())
@@ -61,37 +68,64 @@ class CallupRepository {
                 batch.commit()
             }
     }
-    /** Each player's update is independently validated. A retry converges to the requested selection. */
+    /** Commit the changed recipients and any lineup withdrawals together. */
     fun saveSelections(match: CallupMatch, selected: Set<String>, previous: List<PlayerCallup>): Task<Void> {
-        val targets = selected + previous.filter { it.selected }.map { it.playerId }
-        val writes = targets.map { player ->
-            val ref = selections.document("${match.id}_$player")
-            db.runTransaction { tx ->
-                val encounter = tx.get(fixtures.document(match.id))
-                val team = tx.get(db.collection("teams").document(match.teamId))
-                val membership = if (player in selected) tx.get(db.collection("teamMemberships").document("${match.teamId}_$player")) else null
-                check(encounter.getString("teamId") == match.teamId && encounter.getString("category") == match.category) { "El partido cambió. Vuelve a seleccionarlo." }
-                check(team.getString("createdBy") == uid) { "Ya no administras este equipo" }
-                check((encounter.getTimestamp("kickoff")?.toDate()?.time ?: 0L) > System.currentTimeMillis()) { "El partido ya comenzó" }
-                if (player in selected) check(membership?.getString("category") == match.category && membership.getString("userId") == player) { "Un jugador ya no pertenece a esta categoría" }
-                val lineupRef = db.collection("matchLineups").document(match.id)
-                val assignmentRef = lineupRef.collection("players").document(player)
-                val oldAssignment = if (player !in selected) tx.get(assignmentRef) else null
+        val actor = uid
+        val previouslySelected = previous.filter { it.selected }.map { it.playerId }.toSet()
+        val additions = selected - previouslySelected
+        val withdrawals = previouslySelected - selected
+        val changed = additions + withdrawals
+        if (changed.isEmpty()) return Tasks.forResult(null)
+        if (callupWriteCost(selected, previouslySelected) > MAX_CALLUP_WRITE_COST)
+            return Tasks.forException(IllegalArgumentException(CALLUP_WRITE_LIMIT_MESSAGE))
+        return db.runTransaction { tx ->
+            val encounter = tx.get(fixtures.document(match.id))
+            val team = tx.get(db.collection("teams").document(match.teamId))
+            val current = changed.associateWith { player -> tx.get(selections.document("${match.id}_$player")) }
+            val memberships = additions.associateWith { player ->
+                tx.get(db.collection("teamMemberships").document("${match.teamId}_$player"))
+            }
+            val lineupRef = db.collection("matchLineups").document(match.id)
+            val assignments = withdrawals.associateWith { player -> tx.get(lineupRef.collection("players").document(player)) }
+            check(encounter.getString("teamId") == match.teamId && encounter.getString("category") == match.category) {
+                "El partido cambió. Vuelve a seleccionarlo."
+            }
+            check(encounter.getString("ownerId") == actor && team.getString("createdBy") == actor) {
+                "Ya no administras este equipo"
+            }
+            check((encounter.getTimestamp("kickoff")?.toDate()?.time ?: 0L) > System.currentTimeMillis()) {
+                "El partido ya comenzó"
+            }
+            changed.forEach { player ->
+                check((current.getValue(player).getBoolean("selected") == true) == (player in previouslySelected)) {
+                    "La convocatoria cambió en otro dispositivo. Recárgala antes de guardar."
+                }
+            }
+            additions.forEach { player ->
+                val membership = memberships.getValue(player)
+                check(membership.getString("teamId") == match.teamId && membership.getString("userId") == player &&
+                    membership.getString("category") == match.category) {
+                    "Un jugador ya no pertenece a esta categoría"
+                }
+            }
+            val details = mapOf("opponent" to encounter.getString("opponent"), "category" to match.category,
+                "kickoff" to encounter.getTimestamp("kickoff"),
+                "responseDeadline" to (encounter.getTimestamp("responseDeadline") ?: encounter.getTimestamp("kickoff")))
+            changed.forEach { player ->
+                val oldAssignment = assignments[player]
                 if (oldAssignment?.exists() == true) {
                     if (oldAssignment.getString("kind") == "STARTER") {
                         tx.delete(lineupRef.collection("slots").document(requireNotNull(oldAssignment.getString("position"))))
                     }
-                    tx.delete(assignmentRef)
+                    tx.delete(lineupRef.collection("players").document(player))
                 }
-                val details = mapOf("opponent" to encounter.getString("opponent"), "category" to match.category,
-                    "kickoff" to encounter.getTimestamp("kickoff"),
-                    "responseDeadline" to (encounter.getTimestamp("responseDeadline") ?: encounter.getTimestamp("kickoff")))
-                tx.set(ref, mapOf("matchId" to match.id, "teamId" to match.teamId, "ownerId" to uid,
-                    "playerId" to player, "selected" to (player in selected), "encounter" to details, "updatedAt" to FieldValue.serverTimestamp()))
-                null
+                tx.set(selections.document("${match.id}_$player"), mapOf(
+                    "matchId" to match.id, "teamId" to match.teamId, "ownerId" to actor,
+                    "playerId" to player, "selected" to (player in selected), "encounter" to details,
+                    "updatedAt" to FieldValue.serverTimestamp()))
             }
+            null
         }
-        return Tasks.whenAll(writes)
     }
     private fun match(doc: DocumentSnapshot): CallupMatch? {
         return CallupMatch(doc.id, doc.getString("teamId") ?: return null,

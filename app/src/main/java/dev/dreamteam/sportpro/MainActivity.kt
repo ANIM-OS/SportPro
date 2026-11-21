@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,6 +60,7 @@ class MainActivity : ComponentActivity() {
                 val coachApproved by authViewModel.coachApproved.collectAsState()
                 val currentUser = FirebaseAuth.getInstance().currentUser
                 val context = LocalContext.current
+                val webClientId = stringResource(R.string.default_web_client_id)
                 val scope = rememberCoroutineScope()
                 val credentialManager = remember(context) { CredentialManager.create(context) }
 
@@ -123,7 +125,7 @@ class MainActivity : ComponentActivity() {
                         scope.launch {
                             try {
                                 val googleIdOption = GetSignInWithGoogleOption.Builder(
-                                    context.getString(R.string.default_web_client_id)
+                                    webClientId
                                 ).build()
 
                                 val request = GetCredentialRequest.Builder()

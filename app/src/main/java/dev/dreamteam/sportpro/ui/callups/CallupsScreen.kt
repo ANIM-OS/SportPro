@@ -46,6 +46,7 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
     var loadingRoster by remember { mutableStateOf(false) }
     var loadingMatches by remember { mutableStateOf(false) }
     var loadingSelection by remember { mutableStateOf(false) }
+    var selectionLoadFailed by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     var editingMatch by remember { mutableStateOf(false) }
@@ -75,16 +76,19 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
     }
     DisposableEffect(matchId) {
         records = emptyList(); selected = emptySet(); dirty = false
-        loadingSelection = matchId.isNotBlank()
+        loadingSelection = matchId.isNotBlank(); selectionLoadFailed = false
         val listener = if (matchId.isBlank()) null else repository.coachSelections(matchId, {
-            records = it; loadingSelection = false
+            if (selectionLoadFailed) error = null
+            records = it; loadingSelection = false; selectionLoadFailed = false
             if (!dirty && !busy) selected = it.filter { record -> record.selected }.map { record -> record.playerId }.toSet()
-        }, { error = it; loadingSelection = true })
+        }, { error = it; loadingSelection = false; selectionLoadFailed = true })
         onDispose { listener?.remove() }
     }
     val eligible = roster.filter { it.category == match?.category }.distinctBy { it.userId }
     val eligibleIds = eligible.map { it.userId }.toSet()
     val invalid = selected - eligibleIds
+    val savedIds = records.filter { it.selected }.map { it.playerId }.toSet()
+    val writeCost = callupWriteCost(selected, savedIds)
     if (confirmExit) AlertDialog(onDismissRequest = { confirmExit = false },
         title = { Text("¿Salir sin guardar?") }, text = { Text("Se perderán los cambios pendientes de la convocatoria.") },
         confirmButton = { TextButton(onClick = onBack) { Text("Salir") } },
@@ -111,8 +115,10 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
             }
             if (match != null) {
                 Text("Rival: ${match.opponent}\nCategoría: ${match.category}\nFecha del partido: ${dateLabel(match.kickoff.toDate().time)} (hora local)")
-                OutlinedButton(enabled = !busy && !dirty, onClick = { editingMatch = true }) { Text("Editar datos del partido") }
                 val future = match.kickoff.toDate().time > System.currentTimeMillis()
+                val editableMatch = future && match.responseDeadline.toDate().time > System.currentTimeMillis()
+                OutlinedButton(enabled = !busy && !dirty && editableMatch, onClick = { editingMatch = true }) { Text("Editar datos del partido") }
+                if (!editableMatch && future) Text("El plazo de respuesta terminó; los datos del partido ya no se pueden editar.")
                 if (!future) Text("El partido ya comenzó: la convocatoria es de solo lectura.")
                 if (loadingRoster || loadingSelection) LinearProgressIndicator(Modifier.fillMaxWidth())
                 HorizontalDivider()
@@ -125,8 +131,9 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
                     Row {
                         Checkbox(modifier = Modifier.semantics { contentDescription = "Convocar a ${player.playerName}" }, checked = player.userId in selected, enabled = future && !busy && !loadingSelection,
                             onCheckedChange = { checked ->
-                                selected = if (checked) selected + player.userId else selected - player.userId
-                                dirty = true; message = null
+                                val next = if (checked) selected + player.userId else selected - player.userId
+                                if (callupWriteCost(next, savedIds) > MAX_CALLUP_WRITE_COST) message = CALLUP_WRITE_LIMIT_MESSAGE
+                                else { selected = next; dirty = selected != savedIds; message = null }
                             })
                         Text(player.playerName, Modifier.padding(top = 12.dp))
                     }
@@ -136,8 +143,9 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
                     TextButton(enabled = !busy, onClick = { selected = selected.intersect(eligibleIds); dirty = true }) { Text("Retirar selecciones no válidas") }
                 }
                 Text(if (selected.size == 1) "1 jugador seleccionado" else "${selected.size} jugadores seleccionados")
+                if (dirty) Text("Guarda para seguir seleccionando si alcanzas el límite de cambios por guardado.", style = MaterialTheme.typography.bodySmall)
                 if (!loadingSelection) {
-                    val saved = !dirty && !busy && error == null && records.isNotEmpty()
+                    val saved = !dirty && !busy && error == null && records.any { it.selected }
                     val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
                     Surface(
                         modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
@@ -151,19 +159,19 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
                                 error != null -> "No se pudo confirmar el estado de la convocatoria"
                                 dirty -> "Cambios sin guardar"
                                 saved -> "✓ Convocatoria guardada"
-                                else -> "Selecciona jugadores para crear la convocatoria"
+                                else -> "No hay jugadores convocados"
                             },
                             modifier = Modifier.padding(12.dp),
                             style = MaterialTheme.typography.labelLarge
                         )
                     }
                 }
-                Button(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = dirty && !busy && !loadingRoster && !loadingSelection && invalid.isEmpty() && future && team != null,
+                Button(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = dirty && writeCost <= MAX_CALLUP_WRITE_COST && !busy && !loadingRoster && !loadingSelection && !selectionLoadFailed && invalid.isEmpty() && future && team != null,
                     onClick = {
                         busy = true; error = null; message = null
                         repository.saveSelections(match, selected, records)
                             .addOnSuccessListener { dirty = false; message = null }
-                            .addOnFailureListener { error = "No se completó el guardado. Algunos cambios pueden haberse aplicado; vuelve a guardar para completar. ${it.localizedMessage}" }
+                            .addOnFailureListener { error = "No se guardó la convocatoria. No se aplicó ningún cambio: ${it.localizedMessage}" }
                             .addOnCompleteListener { busy = false }
                     }) { Text(if (busy) "Guardando…" else "Guardar convocatoria") }
                 if (dirty) TextButton(enabled = !busy, onClick = {
@@ -297,15 +305,24 @@ private fun MyCallups(repository: CallupRepository, hideWhenEmpty: Boolean = fal
 private fun PlayerMatchCard(row: PlayerCallup, repository: CallupRepository, onOpenLineup: (CallupMatch) -> Unit) {
     var match by remember { mutableStateOf<CallupMatch?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var loadingMatch by remember(row.matchId) { mutableStateOf(true) }
     DisposableEffect(row.matchId) {
-        val listener = repository.match(row.matchId, { match = it; error = null }, { match = null; error = it })
+        val listener = repository.match(row.matchId, { match = it; error = null; loadingMatch = false },
+            { match = null; error = it; loadingMatch = false })
         onDispose { listener.remove() }
     }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(if (!row.selected) "Convocatoria retirada" else if (match != null) "Estás convocado" else "Convocatoria pendiente de comprobar")
-            match?.let { Text("vs ${it.opponent}\n${it.category}\n${dateLabel(it.kickoff.toDate().time)} (hora local)") }
-                ?: Text(error ?: "El encuentro no está disponible")
+            Text(when {
+                !row.selected -> "Convocatoria retirada"
+                match == null -> "Convocatoria sin confirmar"
+                match?.kickoff?.toDate()?.time?.let { it <= System.currentTimeMillis() } == true -> "Partido finalizado"
+                else -> "Estás convocado"
+            })
+            (match ?: row.encounter)?.let { Text("vs ${it.opponent}\n${it.category}\n${dateLabel(it.kickoff.toDate().time)} (hora local)") }
+                ?: Text("El encuentro no está disponible")
+            if (loadingMatch) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (!loadingMatch && match == null && row.encounter != null) Text(error ?: "Se muestran los últimos datos guardados; no se pudo confirmar el partido.")
             AvailabilityActions(row, match)
             match?.let { current -> OutlinedButton(onClick = { onOpenLineup(current) }) { Text("Ver alineación del partido") } }
         }
