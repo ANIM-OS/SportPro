@@ -12,9 +12,11 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.Source
 import com.google.firebase.Timestamp
 import com.google.firebase.storage.FirebaseStorage
 import com.google.firebase.storage.StorageException
+import com.google.android.gms.tasks.Tasks
 import dev.dreamteam.sportpro.data.model.Team
 import dev.dreamteam.sportpro.data.model.TeamInvite
 import dev.dreamteam.sportpro.data.model.TeamJoinCode
@@ -350,20 +352,54 @@ class TeamsViewModel : ViewModel() {
             return
         }
         _uiState.update { it.copy(managementBusy = true, managementError = null) }
-        firestore.collection("teamMemberships").document("${team.id}_${member.userId}").update(mapOf(
-            "playerName" to member.playerName.trim(),
-            "category" to member.category,
-            "jerseyNumber" to (member.jerseyNumber ?: FieldValue.delete())
-        )).addOnSuccessListener { _uiState.update { it.copy(managementBusy = false) } }
-            .addOnFailureListener { error -> _uiState.update { it.copy(managementBusy = false, managementError = error.localizedMessage ?: "No se pudo editar al jugador") } }
+        val save: () -> Unit = {
+            firestore.collection("teamMemberships").document("${team.id}_${member.userId}").update(mapOf(
+                "playerName" to member.playerName.trim(),
+                "category" to member.category,
+                "jerseyNumber" to (member.jerseyNumber ?: FieldValue.delete())
+            )).addOnSuccessListener { _uiState.update { it.copy(managementBusy = false) } }
+                .addOnFailureListener { error -> _uiState.update { it.copy(managementBusy = false, managementError = error.localizedMessage ?: "No se pudo editar al jugador") } }
+        }
+        val currentCategory = _uiState.value.members.firstOrNull { it.userId == member.userId }?.category
+        if (currentCategory != member.category) {
+            withNoFutureCallups(team.id, member.userId, save)
+        } else save()
     }
 
     fun removeMember(team: Team, member: TeamMember) {
         if (!owns(team)) return
         _uiState.update { it.copy(managementBusy = true, managementError = null) }
-        firestore.collection("teamMemberships").document("${team.id}_${member.userId}").delete()
-            .addOnSuccessListener { _uiState.update { it.copy(managementBusy = false) } }
-            .addOnFailureListener { error -> _uiState.update { it.copy(managementBusy = false, managementError = error.localizedMessage ?: "No se pudo retirar al jugador") } }
+        withNoFutureCallups(team.id, member.userId) {
+            firestore.collection("teamMemberships").document("${team.id}_${member.userId}").delete()
+                .addOnSuccessListener { _uiState.update { it.copy(managementBusy = false) } }
+                .addOnFailureListener { error -> _uiState.update { it.copy(managementBusy = false, managementError = error.localizedMessage ?: "No se pudo retirar al jugador") } }
+        }
+    }
+
+    private fun withNoFutureCallups(teamId: String, playerId: String, proceed: () -> Unit) {
+        val ownerId = auth.currentUser?.uid ?: run {
+            _uiState.update { it.copy(managementBusy = false, managementError = "La sesión terminó. Inicia sesión de nuevo.") }
+            return
+        }
+        firestore.collection("matchCallupPlayers").whereEqualTo("ownerId", ownerId).get(Source.SERVER)
+            .addOnSuccessListener { snapshot ->
+                val now = System.currentTimeMillis()
+                val called = snapshot.documents.any { doc ->
+                    if (doc.getString("teamId") != teamId || doc.getString("playerId") != playerId || doc.getBoolean("selected") != true) false
+                    else {
+                        val encounter = doc.get("encounter") as? Map<*, *>
+                        val kickoff = encounter?.get("kickoff") as? Timestamp
+                        kickoff == null || kickoff.toDate().time > now
+                    }
+                }
+                if (called) {
+                    _uiState.update { it.copy(managementBusy = false, managementError =
+                        "Primero retira al jugador de sus convocatorias futuras en Equipos → Convocatorias.") }
+                } else proceed()
+            }.addOnFailureListener { error ->
+                _uiState.update { it.copy(managementBusy = false, managementError =
+                    error.localizedMessage ?: "No se pudo comprobar las convocatorias del jugador") }
+            }
     }
 
     fun loadOrCreateJoinCode(team: Team) {
@@ -546,6 +582,7 @@ class TeamsViewModel : ViewModel() {
         deleteRelated("teamJoinCodes", team.id, {
           deleteRelated("teamLineups", team.id, {
            deleteRelated("teamInvites", team.id, {
+            deleteMatchData(team.id, {
             deleteRelated("teamMemberships", team.id, {
                 val finishDelete = {
                     firestore.collection("teams").document(team.id).delete()
@@ -565,13 +602,91 @@ class TeamsViewModel : ViewModel() {
                         }
                 }
             }, failure)
+            }, failure)
            }, failure)
           }, failure)
         }, failure)
     }
 
+    private fun deleteMatchData(teamId: String, done: () -> Unit, failed: (Exception) -> Unit) {
+        firestore.collection("matchFixtures").whereEqualTo("teamId", teamId).get(Source.SERVER)
+            .addOnSuccessListener { snapshot ->
+                val matches = snapshot.documents
+                fun next(index: Int) {
+                    if (index == matches.size) done()
+                    else deleteMatchDataForFixture(matches[index].reference, { next(index + 1) }, failed)
+                }
+                next(0)
+            }.addOnFailureListener(failed)
+    }
+
+    private fun deleteMatchDataForFixture(
+        fixture: com.google.firebase.firestore.DocumentReference,
+        done: () -> Unit,
+        failed: (Exception) -> Unit
+    ) {
+        val lineup = firestore.collection("matchLineups").document(fixture.id)
+        fun deleteSelections() {
+            val ownerId = auth.currentUser?.uid ?: return failed(IllegalStateException("La sesión terminó"))
+            firestore.collection("matchCallupPlayers")
+                .whereEqualTo("ownerId", ownerId).whereEqualTo("matchId", fixture.id).limit(100)
+                .get(Source.SERVER).addOnSuccessListener { snapshot ->
+                    if (snapshot.isEmpty) {
+                        fixture.delete().addOnSuccessListener { done() }.addOnFailureListener(failed)
+                    } else {
+                        val responses = snapshot.documents.map { selection ->
+                            firestore.collection("matchAvailability").document(selection.id).get(Source.SERVER)
+                        }
+                        Tasks.whenAllSuccess<DocumentSnapshot>(responses).addOnSuccessListener { responseDocs ->
+                            val batch = firestore.batch()
+                            responseDocs.filter { it.exists() }.forEach { batch.delete(it.reference) }
+                            snapshot.documents.forEach { batch.delete(it.reference) }
+                            batch.commit().addOnSuccessListener { deleteSelections() }.addOnFailureListener(failed)
+                        }.addOnFailureListener(failed)
+                    }
+                }.addOnFailureListener(failed)
+        }
+        fun deleteLineup() {
+            lineup.collection("players").limit(5).get(Source.SERVER).addOnSuccessListener { snapshot ->
+                if (!snapshot.isEmpty) {
+                    val batch = firestore.batch()
+                    snapshot.documents.forEach { player ->
+                        if (player.getString("kind") == "STARTER") {
+                            player.getString("position")?.let { batch.delete(lineup.collection("slots").document(it)) }
+                        }
+                        batch.delete(player.reference)
+                    }
+                    batch.commit().addOnSuccessListener { deleteLineup() }.addOnFailureListener(failed)
+                } else {
+                    deleteRelatedLineupSlots(lineup, {
+                        lineup.get(Source.SERVER).addOnSuccessListener { parent ->
+                            if (parent.exists()) lineup.delete().addOnSuccessListener { deleteSelections() }.addOnFailureListener(failed)
+                            else deleteSelections()
+                        }.addOnFailureListener(failed)
+                    }, failed)
+                }
+            }.addOnFailureListener(failed)
+        }
+        deleteLineup()
+    }
+
+    private fun deleteRelatedLineupSlots(
+        lineup: com.google.firebase.firestore.DocumentReference,
+        done: () -> Unit,
+        failed: (Exception) -> Unit
+    ) {
+        lineup.collection("slots").limit(10).get(Source.SERVER).addOnSuccessListener { snapshot ->
+            if (snapshot.isEmpty) done()
+            else {
+                val batch = firestore.batch()
+                snapshot.documents.forEach { batch.delete(it.reference) }
+                batch.commit().addOnSuccessListener { deleteRelatedLineupSlots(lineup, done, failed) }.addOnFailureListener(failed)
+            }
+        }.addOnFailureListener(failed)
+    }
+
     private fun deleteRelated(collection: String, teamId: String, done: () -> Unit, failed: (Exception) -> Unit) {
-        firestore.collection(collection).whereEqualTo("teamId", teamId).limit(100).get()
+        firestore.collection(collection).whereEqualTo("teamId", teamId).limit(100).get(Source.SERVER)
             .addOnSuccessListener { snapshot ->
                 if (snapshot.isEmpty) {
                     done()

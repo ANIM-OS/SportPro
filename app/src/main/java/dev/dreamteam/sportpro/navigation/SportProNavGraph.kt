@@ -74,7 +74,6 @@ import dev.dreamteam.sportpro.ui.events.EventCatalogScreen
 import dev.dreamteam.sportpro.ui.events.EventDetailScreen
 import dev.dreamteam.sportpro.ui.events.EventEditScreen
 import dev.dreamteam.sportpro.ui.events.EventHistoryScreen
-import dev.dreamteam.sportpro.ui.events.LiveEventsEntryScreen
 import dev.dreamteam.sportpro.domain.access.COACH_PENDING_MESSAGE
 import dev.dreamteam.sportpro.ui.events.RegisterEventScreen
 import dev.dreamteam.sportpro.ui.teams.TeamsScreen
@@ -93,7 +92,7 @@ sealed class SportProRoute(
 
     data object Live : SportProRoute(
         route = "live",
-        title = "En vivo"
+        title = "Partidos"
     )
 
     data object Statistics : SportProRoute(
@@ -382,36 +381,10 @@ fun SportProNavGraph(
             }
 
             composable(SportProRoute.Live.route) {
-
                 LiveMatchScreen(
-                    canManageCatalog = RoleAccess.can(
-                        roles,
-                        RoleCapability.MANAGE_EVENT_CATALOG,
-                        isCoachApproved
-                    ),
-                    canRegisterEvents = RoleAccess.can(
-                        roles,
-                        RoleCapability.REGISTER_EVENTS,
-                        isCoachApproved
-                    ),
-                    onOpenCatalog = {
-                        navController.navigate(
-                            SportProRoute.EventCatalog.route
-                        )
-                    },
-                    onRegisterEvent = { matchId ->
-                        navController.navigate(
-                            SportProRoute.RegisterEvent.create(matchId)
-                        )
-                    },
-                    onOpenEvent = { matchId, eventId ->
-                        navController.navigate(
-                            SportProRoute.EventDetail.create(
-                                matchId,
-                                eventId
-                            )
-                        )
-                    }
+                    isCoach = AppRole.COACH in roles,
+                    isPlayer = AppRole.PLAYER in roles,
+                    isGuardian = AppRole.PARENT in roles
                 )
             }
 
