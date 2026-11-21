@@ -273,6 +273,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
         if (uncategorized.isNotEmpty()) {
             Spacer(Modifier.height(14.dp))
             Text("SIN CATEGORÍA", fontWeight = FontWeight.Bold)
+            if (owner) Text("Asigna una categoría para incluir a estos jugadores en entrenamientos y partidos.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             uncategorized.forEach { member ->
                 if (owner) TextButton(onClick = { editingMember = member }) { Text("${member.playerName} · Asignar categoría") }
                 else Text(member.playerName)
@@ -286,19 +287,20 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
 private fun MemberDialog(team: Team, member: TeamMember, busy: Boolean, error: String?,
                          onDismiss: () -> Unit, onSave: (TeamMember) -> Unit, onRemove: () -> Unit) {
     var name by remember(member.userId) { mutableStateOf(member.playerName) }
-    var category by remember(member.userId) { mutableStateOf(member.category.ifBlank { team.categories.firstOrNull().orEmpty() }) }
+    var category by remember(member.userId) { mutableStateOf(member.category) }
     var jersey by remember(member.userId) { mutableStateOf(member.jerseyNumber?.toString().orEmpty()) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Editar jugador") },
         text = {
             Column(Modifier.heightIn(max = 350.dp).verticalScroll(rememberScrollState())) {
                 OutlinedTextField(name, { name = it.take(80) }, label = { Text("Nombre") })
                 OutlinedTextField(jersey, { jersey = it.filter(Char::isDigit).take(2) }, label = { Text("Dorsal") })
+                if (category !in team.categories) Text("Selecciona la categoría del jugador.", color = MaterialTheme.colorScheme.error)
                 team.categories.forEach { item -> FilterChip(selected = item == category, onClick = { category = item }, label = { Text(item) }) }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 TextButton(onClick = onRemove, enabled = !busy) { Text("Retirar del equipo", color = MaterialTheme.colorScheme.error) }
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(member.copy(playerName = name, category = category, jerseyNumber = jersey.toIntOrNull())) }, enabled = !busy) { Text("Guardar") } },
+        confirmButton = { TextButton(onClick = { onSave(member.copy(playerName = name, category = category, jerseyNumber = jersey.toIntOrNull())) }, enabled = !busy && name.isNotBlank() && category in team.categories) { Text("Guardar") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } })
 }
 

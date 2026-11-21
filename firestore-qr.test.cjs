@@ -94,6 +94,11 @@ const write = (p,fields,timestamps=[]) => ({update:{name:path(p),fields}, ...(ti
  r=await read("teams/team","player");assert.equal(r.ok,true,r.body);
  r=await query([["userId","player"]],"player","teamMemberships");assert.equal(r.ok,true,r.body);
  r=await query([["teamId","team"]],"coach","teamMemberships");assert.equal(r.ok,true,r.body);
+ const legacyAssignment = category => ({update:{name:path("teamMemberships/team_member"),fields:{playerName:stringValue("Jugador existente"),category:stringValue(category)}},updateMask:{fieldPaths:["playerName","category"]}});
+ r=await commit([legacyAssignment("SUB-15")],"member");assert.equal(r.status,403,"A legacy member cannot assign their own category");
+ r=await commit([legacyAssignment("SUB-17")],"coach");assert.equal(r.status,403,"Coach must select a category offered by the team");
+ r=await commit([legacyAssignment("SUB-15")],"coach");assert.equal(r.ok,true,r.body);
+ r=await read("teamMemberships/team_member","member");assert.equal(JSON.parse(r.body).fields.category.stringValue,"SUB-15");
  for (const [id,category] of [["session","SUB-15"],["otherCategory","SUB-17"]]) {
   r=await commit([write("trainingSessions/"+id,{teamId:stringValue("team"),createdBy:stringValue("coach"),category:stringValue(category)})],"admin");
   assert.equal(r.ok,true,r.body);
@@ -218,6 +223,17 @@ const write = (p,fields,timestamps=[]) => ({update:{name:path(p),fields}, ...(ti
   invitedBy:stringValue("coach"),status:stringValue("PENDING"),...(category?{category:stringValue(category)}:{})
  },["createdAt"]);
  r=await commit([emailInvite("")],"coach");assert.equal(r.status,403,"Email invitations require a category");
+ const legacyInvite = emailInvite("");
+ legacyInvite.update.name = path("teamInvites/legacyEmail");
+ r=await commit([legacyInvite],"admin");assert.equal(r.ok,true,r.body);
+ r=await read("teamInvites/legacyEmail","emailPlayer");assert.equal(r.ok,true,r.body);
+ const legacyReply = status => ({update:{name:path("teamInvites/legacyEmail"),fields:{status:stringValue(status)}},updateMask:{fieldPaths:["status"]}});
+ const legacyEmailMember = write("teamMemberships/team_emailPlayer", {
+  teamId:stringValue("team"),userId:stringValue("emailPlayer"),playerName:stringValue("Jugador"),
+  inviteId:stringValue("legacyEmail"),category:stringValue("SUB-15")
+ },["acceptedAt"]);
+ r=await commit([legacyReply("ACCEPTED"),legacyEmailMember],"emailPlayer");assert.equal(r.status,403,"Legacy invite cannot grant a category chosen by the recipient");
+ r=await commit([legacyReply("DECLINED")],"emailPlayer");assert.equal(r.ok,true,r.body);
  r=await commit([emailInvite("SUB-17")],"coach");assert.equal(r.status,403,"Category must belong to the team");
  r=await commit([emailInvite("SUB-15")],"coach");assert.equal(r.ok,true,r.body);
  const acceptEmail={update:{name:path("teamInvites/byEmail"),fields:{status:stringValue("ACCEPTED")}},updateMask:{fieldPaths:["status"]}};
