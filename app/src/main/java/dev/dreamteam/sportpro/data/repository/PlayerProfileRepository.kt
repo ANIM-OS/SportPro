@@ -12,7 +12,6 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.storage.FirebaseStorage
-import com.google.firebase.storage.StorageMetadata
 import dev.dreamteam.sportpro.data.model.GuardianLink
 import dev.dreamteam.sportpro.data.model.PlayerProfile
 import java.io.ByteArrayOutputStream
@@ -60,31 +59,21 @@ class PlayerProfileRepository {
     }
 
     /**
-     * Sube la foto a Cloud Storage (playerProfiles/{playerId}/photo.jpg). Si Storage no está
-     * disponible, guarda una miniatura comprimida en el perfil para que la foto no se pierda.
+     * Guarda la foto reducida en el propio perfil, igual que las fotos de equipo: el proyecto
+     * usa el plan Spark sin Cloud Storage, y subir a un bucket inexistente o a un emulador
+     * apagado deja la carga reintentando varios minutos.
      */
     fun uploadPhoto(context: Context, playerId: String, uri: Uri, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        val bytes = try {
-            compressPhoto(context, uri, maxSide = 512, quality = 85)
+        val photo = try {
+            Base64.encodeToString(compressPhoto(context, uri, maxSide = 512, quality = 80), Base64.NO_WRAP)
+                .takeIf { it.length <= MAX_PHOTO_BASE64 }
+                ?: Base64.encodeToString(compressPhoto(context, uri, maxSide = 256, quality = 70), Base64.NO_WRAP)
         } catch (_: Exception) {
             onError("No se pudo procesar la imagen. Elige otra foto.")
             return
         }
-        val path = "$PROFILES/$playerId/photo.jpg"
-        val metadata = StorageMetadata.Builder().setContentType("image/jpeg").build()
-        storage.reference.child(path).putBytes(bytes, metadata)
-            .addOnSuccessListener {
-                updatePhotoFields(playerId, mapOf("photoPath" to path, "photoBase64" to FieldValue.delete()), onSuccess, onError)
-            }
-            .addOnFailureListener {
-                val thumbnail = try {
-                    Base64.encodeToString(compressPhoto(context, uri, maxSide = 256, quality = 75), Base64.NO_WRAP)
-                } catch (_: Exception) {
-                    onError("No se pudo procesar la imagen. Elige otra foto.")
-                    return@addOnFailureListener
-                }
-                updatePhotoFields(playerId, mapOf("photoBase64" to thumbnail), onSuccess, onError)
-            }
+        // photoPath se borra para que no se muestre una foto anterior de Cloud Storage.
+        updatePhotoFields(playerId, mapOf("photoBase64" to photo, "photoPath" to FieldValue.delete()), onSuccess, onError)
     }
 
     /** Carga la foto del perfil (miniatura guardada o archivo en Cloud Storage). */
@@ -218,5 +207,7 @@ class PlayerProfileRepository {
         const val PROFILES = "playerProfiles"
         const val GUARDIANS = "playerGuardians"
         private const val MAX_PHOTO_BYTES = 2L * 1024 * 1024
+        // Por debajo del límite de 800000 caracteres de las reglas de Firestore.
+        private const val MAX_PHOTO_BASE64 = 700_000
     }
 }
