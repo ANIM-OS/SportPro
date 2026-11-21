@@ -6,6 +6,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -42,6 +44,7 @@ import dev.dreamteam.sportpro.navigation.SportProNavGraph
 enum class Screen {
     LOGIN,
     REGISTER,
+    VERIFY_EMAIL,
     ROLE_SELECTION,
     HOME
 }
@@ -51,13 +54,21 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            var isDarkTheme by remember { mutableStateOf(true) }
+            var isDarkTheme by rememberSaveable { mutableStateOf(true) }
+            SideEffect {
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !isDarkTheme
+                    isAppearanceLightNavigationBars = !isDarkTheme
+                }
+            }
 
             SportProTheme(darkTheme = isDarkTheme) {
                 val authViewModel: AuthViewModel = viewModel()
                 val authState by authViewModel.authState.collectAsState()
                 val sessionRoles by authViewModel.sessionRoles.collectAsState()
                 val coachApproved by authViewModel.coachApproved.collectAsState()
+                val isAdmin by authViewModel.isAdmin.collectAsState()
+                val privacyReady by authViewModel.privacyReady.collectAsState()
                 val currentUser = FirebaseAuth.getInstance().currentUser
                 val context = LocalContext.current
                 val webClientId = stringResource(R.string.default_web_client_id)
@@ -70,6 +81,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) { authViewModel.checkSession() }
                 var errorMessage by remember { mutableStateOf<String?>(null) }
                 var isEmailError by remember { mutableStateOf(false) }
+                var verificationMessage by remember { mutableStateOf("") }
                 var isSigningOut by remember { mutableStateOf(false) }
                 val isLoading = authState is AuthState.Loading || isSigningOut
                 val isGoogleLoading = (authState as? AuthState.Loading)?.isGoogle == true
@@ -88,6 +100,11 @@ class MainActivity : ComponentActivity() {
                             currentScreen = if (state.needsRoleSelection) Screen.ROLE_SELECTION else Screen.HOME
                             if (!state.needsRoleSelection) editingRoles = false
                             state.message?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+                            authViewModel.resetState()
+                        }
+                        is AuthState.VerificationRequired -> {
+                            verificationMessage = state.message
+                            currentScreen = Screen.VERIFY_EMAIL
                             authViewModel.resetState()
                         }
                         is AuthState.Error -> {
@@ -194,6 +211,23 @@ class MainActivity : ComponentActivity() {
                             isDarkTheme = isDarkTheme,
                             onToggleTheme = { isDarkTheme = !isDarkTheme }
                         )
+                        Screen.VERIFY_EMAIL -> Column(
+                            modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(24.dp),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("Verifica tu correo", style = MaterialTheme.typography.headlineSmall)
+                            Spacer(Modifier.height(16.dp))
+                            Text(verificationMessage)
+                            Spacer(Modifier.height(24.dp))
+                            Button(onClick = authViewModel::refreshEmailVerification, enabled = !isLoading) {
+                                Text("Ya verifiqué mi correo")
+                            }
+                            TextButton(onClick = authViewModel::sendVerificationEmail, enabled = !isLoading) {
+                                Text("Reenviar correo")
+                            }
+                            TextButton(onClick = signOut, enabled = !isLoading) { Text("Cerrar sesión") }
+                        }
                         Screen.ROLE_SELECTION -> RoleSelectionScreen(
                             userEmail = registeredEmail,
                             userName = FirebaseAuth.getInstance().currentUser?.displayName?.takeIf { it.isNotBlank() }
@@ -216,6 +250,8 @@ class MainActivity : ComponentActivity() {
                             userEmail = FirebaseAuth.getInstance().currentUser?.email ?: registeredEmail,
                             roles = sessionRoles,
                             coachApproved = coachApproved,
+                            isAdmin = isAdmin,
+                            privacyReady = privacyReady,
                             onLogout = signOut,
                             onEditRoles = {
                                 editingRoles = true

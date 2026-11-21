@@ -27,10 +27,6 @@ internal fun dateLabel(millis: Long) = DateFormat.getDateTimeInstance(DateFormat
 @Composable
 fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boolean = false, onBack: () -> Unit) {
     var lineupMatch by remember { mutableStateOf<CallupMatch?>(null) }
-    lineupMatch?.let {
-        dev.dreamteam.sportpro.ui.lineups.MatchLineupScreen(it, canManage && it.ownerId == com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid) { lineupMatch = null }
-        return
-    }
     val directory = remember { TeamDirectoryRepository() }
     val repository = remember { CallupRepository() }
     var teams by remember { mutableStateOf<List<Team>>(emptyList()) }
@@ -98,6 +94,10 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
             onDismiss = { editingMatch = false; createMatch = false },
             onSaved = { editingMatch = false; createMatch = false; message = "Partido guardado. Puedes seleccionarlo." })
     }
+    lineupMatch?.let {
+        dev.dreamteam.sportpro.ui.lineups.MatchLineupScreen(it, canManage && it.ownerId == com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid) { lineupMatch = null }
+        return
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         TextButton(onClick = leave, enabled = !busy) { Text("← Volver") }
         Text("Convocatorias", style = MaterialTheme.typography.headlineSmall)
@@ -125,7 +125,7 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
                 Text("2. Jugadores convocados", style = MaterialTheme.typography.titleMedium)
                 if (!loadingRoster && eligible.isEmpty()) {
                     Text("No hay jugadores en ${match.category}.", style = MaterialTheme.typography.bodyLarge)
-                    Text("Añade jugadores a esta categoría desde Equipos → Plantilla y alineación general.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Añade jugadores a esta categoría desde Equipos → Plantilla.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 eligible.forEach { player ->
                     Row {

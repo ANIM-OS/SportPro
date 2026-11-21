@@ -3,6 +3,8 @@ package dev.dreamteam.sportpro.ui.auth
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,6 +22,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.dreamteam.sportpro.BuildConfig
 
 /**
  * Composable screen for new user registration.
@@ -64,6 +67,7 @@ fun RegisterScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
                 .navigationBarsPadding()
                 .statusBarsPadding()
                 .imePadding()
@@ -261,11 +265,13 @@ fun RegisterScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            GoogleSignInSection(
-                onClick = onGoogleRegisterClick,
-                isLoading = isLoading,
-                isGoogleLoading = isGoogleLoading
-            )
+            if (!BuildConfig.FIREBASE_SANDBOX) {
+                GoogleSignInSection(
+                    onClick = onGoogleRegisterClick,
+                    isLoading = isLoading,
+                    isGoogleLoading = isGoogleLoading
+                )
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 

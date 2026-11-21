@@ -24,6 +24,7 @@ import dev.dreamteam.sportpro.data.model.TrainingSession
 @Composable
 fun SessionDetailScreen(
     sessionId: String,
+    canManage: Boolean,
     onBack: () -> Unit,
     onEdit: (String) -> Unit,
     onOpenPlayerHistory: (String) -> Unit,
@@ -42,13 +43,14 @@ fun SessionDetailScreen(
     }
 
     val session = uiState.session
+    val canRecord = canManage && uiState.isOwner
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             SportTopBar(title = "SESIÓN", onBack = onBack, actions = {
-                if (session != null && uiState.isOwner && session.isEditable()) {
+                if (session != null && canRecord && session.isEditable()) {
                     IconButton(onClick = { onEdit(session.id) }) {
                         Icon(Icons.Default.Edit, contentDescription = "Editar sesión")
                     }
@@ -99,8 +101,9 @@ fun SessionDetailScreen(
                         }
                     }
 
-                    if (uiState.isOwner) {
+                    if (canRecord) {
                         item { AttendanceHeader(uiState.roster, uiState.attendance) }
+                        uiState.error?.let { message -> item { MessageText(message) } }
                         when {
                             uiState.rosterLoading -> item { LoadingBox() }
                             uiState.roster.isEmpty() -> item {
@@ -119,7 +122,8 @@ fun SessionDetailScreen(
                     } else {
                         item {
                             Text(
-                                text = "El entrenador registra la asistencia. Puedes consultarla en \"Mi asistencia\".",
+                                text = if (uiState.isOwner) "Se requiere la aprobación de entrenador para registrar asistencia."
+                                    else "El entrenador registra la asistencia. Puedes consultarla en \"Mi asistencia\".",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 13.sp
                             )

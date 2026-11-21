@@ -100,24 +100,20 @@ fun InfoCard(
     }
 }
 
-/** Tarjeta de acceso a un módulo, con la historia de usuario que cubre. */
+/** Tarjeta de acceso a un módulo. */
 @Composable
-fun ModuleCard(title: String, description: String, story: String, icon: ImageVector, onClick: () -> Unit) {
+fun ModuleCard(title: String, description: String, icon: ImageVector, onClick: () -> Unit) {
     InfoCard(onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(imageVector = icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = title,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(text = story, color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
+                Text(
+                    text = title,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(text = description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
             }

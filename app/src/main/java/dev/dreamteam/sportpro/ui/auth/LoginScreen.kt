@@ -17,6 +17,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.dreamteam.sportpro.BuildConfig
 import dev.dreamteam.sportpro.R
 
 /**
@@ -223,11 +224,13 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            GoogleSignInSection(
-                onClick = onGoogleLoginClick,
-                isLoading = isLoading,
-                isGoogleLoading = isGoogleLoading
-            )
+            if (!BuildConfig.FIREBASE_SANDBOX) {
+                GoogleSignInSection(
+                    onClick = onGoogleLoginClick,
+                    isLoading = isLoading,
+                    isGoogleLoading = isGoogleLoading
+                )
+            }
 
             Spacer(modifier = Modifier.height(32.dp))
 

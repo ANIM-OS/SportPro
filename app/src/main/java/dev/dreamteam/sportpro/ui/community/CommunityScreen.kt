@@ -46,9 +46,9 @@ import java.util.Locale
 
 @Composable
 fun CommunityScreen(
+    onOpenComments: ((String) -> Unit)? = null,
     onCreatePostClick: () -> Unit,
     canCreatePost: Boolean,
-    onOpenComments: (String) -> Unit = {},
     viewModel: CommunityViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -178,7 +178,7 @@ fun CommunityScreen(
                                 canModerate = uiState.canModerate,
                                 isModerating = uiState.moderatingPostId == post.id,
                                 onModerate = { viewModel.moderatePost(post.id) },
-                                onOpenComments = { onOpenComments(post.id) }
+                                onOpenComments = onOpenComments?.let { open -> { open(post.id) } }
                             )
                         }
                     }
@@ -194,7 +194,7 @@ private fun CommunityPostCard(
     canModerate: Boolean,
     isModerating: Boolean,
     onModerate: () -> Unit,
-    onOpenComments: () -> Unit
+    onOpenComments: (() -> Unit)?
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -275,9 +275,7 @@ private fun CommunityPostCard(
                 fontSize = 11.sp
             )
 
-            TextButton(onClick = onOpenComments) {
-                Text("Comentarios y reacciones")
-            }
+            if (onOpenComments != null) TextButton(onClick = onOpenComments) { Text("Comentarios y reacciones") }
 
             if (canModerate) {
                 TextButton(onClick = onModerate, enabled = !isModerating) {

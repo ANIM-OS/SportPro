@@ -3,6 +3,7 @@ package dev.dreamteam.sportpro.data.repository
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import dev.dreamteam.sportpro.data.model.CommunityPost
@@ -140,8 +141,10 @@ class CommunityRepository {
         val postsByQuery = mutableMapOf<String, List<CommunityPost>>()
         var memberTeamIds: Set<String>? = null
         var ownedTeamIds: Set<String>? = null
+        var disposed = false
 
         fun emit() {
+            if (disposed) return
             onUpdate(postsByQuery.values.flatten().distinctBy { it.id }.sortedByDescending { it.createdAt })
         }
 
@@ -180,7 +183,7 @@ class CommunityRepository {
                 firestore.collection("teams").document(teamId).get()
                     .addOnSuccessListener { team ->
                         loadingTeamIds -= teamId
-                        if (!team.exists() || teamId !in (memberTeamIds.orEmpty() + ownedTeamIds.orEmpty())) return@addOnSuccessListener
+                        if (disposed || !team.exists() || teamId !in (memberTeamIds.orEmpty() + ownedTeamIds.orEmpty())) return@addOnSuccessListener
                         val audience = team.getString("type") ?: "EQUIPO"
                         val registration = firestore.collection("communityPosts")
                             .whereEqualTo("teamId", teamId)
@@ -188,7 +191,10 @@ class CommunityRepository {
                             .whereEqualTo("active", true)
                             .whereEqualTo("moderated", false)
                             .addSnapshotListener { snapshot, error ->
+                                if (disposed) return@addSnapshotListener
                                 if (error != null) {
+                                    postsByQuery.remove("team:$teamId")
+                                    emit()
                                     onError(error.localizedMessage ?: "No se pudieron cargar las publicaciones del equipo")
                                     return@addSnapshotListener
                                 }
@@ -245,6 +251,7 @@ class CommunityRepository {
 
         return object : ListenerRegistration {
             override fun remove() {
+                disposed = true
                 registrations.forEach(ListenerRegistration::remove)
                 teamRegistrations.values.forEach(ListenerRegistration::remove)
                 teamRegistrations.clear()
@@ -263,9 +270,19 @@ class CommunityRepository {
                 if (moderator.exists()) {
                     onResult(true)
                 } else {
-                    firestore.collection("admins").document(uid).get()
-                        .addOnSuccessListener { onResult(it.exists()) }
-                        .addOnFailureListener(failure)
+                    firestore.document("adminAccess/$uid").get(Source.SERVER)
+                        .addOnSuccessListener { onResult(true) }
+                        .addOnFailureListener { error ->
+                            if ((error as? com.google.firebase.firestore.FirebaseFirestoreException)?.code ==
+                                com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED
+                            ) {
+                                firestore.document("admins/$uid").get(Source.SERVER)
+                                    .addOnSuccessListener { onResult(it.exists()) }
+                                    .addOnFailureListener(failure)
+                            } else {
+                                failure(error)
+                            }
+                        }
                 }
             }
             .addOnFailureListener(failure)

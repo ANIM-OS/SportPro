@@ -13,6 +13,7 @@ const assign=(id,kind,position,match='local-match')=>[
   update(`${lineup(match)}/players/${id}`,assignment(id,kind,position))
 ];
 await set('teamLineups/local-team_SUB-17',{teamId:'local-team',category:'SUB-17',formation:'4-4-2',positions:{P0:player.id}},'owner',true);
+expect(await set('teamLineups/local-team_SUB-17',{teamId:'local-team',category:'SUB-17',formation:'4-3-3',positions:{}},coach.token,true),403,'US11 legacy general lineup is read-only');
 const generalBefore=await request(`${root}/teamLineups/local-team_SUB-17`,undefined,coach.token,'GET');
 expect(await set(lineup(),parent(),coach.token,true),200,'US11 create per-match lineup');
 expect(await commit(assign(player.id,'STARTER','P0')),200,'US11 called player assigned as starter');

@@ -11,14 +11,14 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.firestore.Source
 import com.google.firebase.storage.FirebaseStorage
 import dev.dreamteam.sportpro.data.model.GuardianLink
 import dev.dreamteam.sportpro.data.model.PlayerProfile
 import java.io.ByteArrayOutputStream
 
 /**
- * US-04: perfil del jugador (playerProfiles/{playerId}), su fotografía y los correos de
- * padres o tutores vinculados (playerGuardians), que habilitan la consulta de US-04, US-05 y US-08.
+ * Perfil deportivo del jugador, fotografía y consulta de sus vínculos activos de tutoría.
  */
 class PlayerProfileRepository {
 
@@ -26,7 +26,6 @@ class PlayerProfileRepository {
     private val firestore = FirebaseFirestore.getInstance()
     private val storage = FirebaseStorage.getInstance()
     private val profiles = firestore.collection(PROFILES)
-    private val guardians = firestore.collection(GUARDIANS)
 
     fun listenProfile(playerId: String, onChange: (PlayerProfile?) -> Unit, onError: (String) -> Unit): ListenerRegistration =
         profiles.document(playerId).addSnapshotListener { snapshot, error ->
@@ -34,8 +33,32 @@ class PlayerProfileRepository {
                 onError(error.userMessage("No se pudo cargar el perfil"))
                 return@addSnapshotListener
             }
-            onChange(snapshot?.takeIf { it.exists() }?.let(::fromDocument))
+            val profile = snapshot?.takeIf { it.exists() }?.let(::fromDocument)
+            onChange(profile)
+            if (profile != null && auth.currentUser?.uid == playerId && snapshot?.metadata?.isFromCache == false) {
+                migrateLegacyContact(profile)
+            }
         }
+
+    private fun migrateLegacyContact(profile: PlayerProfile) {
+        val contactRef = firestore.collection("playerContacts").document(profile.playerId)
+        val profileRef = profiles.document(profile.playerId)
+        firestore.document("deploymentCapabilities/us22").get(Source.SERVER).addOnSuccessListener {
+            firestore.runTransaction { transaction ->
+                if (!transaction.get(contactRef).exists()) {
+                    val current = transaction.get(profileRef)
+                    if (current.exists()) {
+                        transaction.set(contactRef, mapOf(
+                            "phone" to current.getString("phone").orEmpty(),
+                            "emergencyName" to current.getString("emergencyName").orEmpty(),
+                            "emergencyRelation" to current.getString("emergencyRelation").orEmpty(),
+                            "emergencyPhone" to current.getString("emergencyPhone").orEmpty()
+                        ))
+                    }
+                }
+            }
+        }
+    }
 
     /** Guarda solo los campos del formulario; la foto se guarda aparte. */
     fun saveProfile(profile: PlayerProfile, onSuccess: () -> Unit, onError: (String) -> Unit) {
@@ -53,7 +76,27 @@ class PlayerProfileRepository {
             "updatedAt" to FieldValue.serverTimestamp(),
             "updatedBy" to auth.currentUser?.uid
         )
-        profiles.document(profile.playerId).set(data, SetOptions.merge())
+        val contact = mapOf(
+            "phone" to profile.phone,
+            "emergencyName" to profile.emergencyName,
+            "emergencyRelation" to profile.emergencyRelation,
+            "emergencyPhone" to profile.emergencyPhone
+        )
+        val profileRef = profiles.document(profile.playerId)
+        firestore.document("deploymentCapabilities/us22").get(Source.SERVER).continueWithTask { capability ->
+            if (capability.isSuccessful) {
+                firestore.batch()
+                    .set(profileRef, data, SetOptions.merge())
+                    .set(firestore.collection("playerContacts").document(profile.playerId), contact)
+                    .commit()
+            } else if ((capability.exception as? com.google.firebase.firestore.FirebaseFirestoreException)?.code ==
+                com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED
+            ) {
+                profileRef.set(data, SetOptions.merge())
+            } else {
+                throw capability.exception ?: IllegalStateException("No se pudo verificar el servidor")
+            }
+        }
             .addOnSuccessListener { onSuccess() }
             .addOnFailureListener { onError(it.userMessage("No se pudo guardar el perfil")) }
     }
@@ -76,6 +119,34 @@ class PlayerProfileRepository {
         updatePhotoFields(playerId, mapOf("photoBase64" to photo, "photoPath" to FieldValue.delete()), onSuccess, onError)
     }
 
+    fun loadContact(
+        playerId: String,
+        teamId: String?,
+        onContact: (List<String>) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val contact = firestore.collection("playerContacts").document(playerId)
+        val read = {
+            contact.get(Source.SERVER).continueWith { task ->
+                val doc = task.result
+                listOfNotNull(
+                    doc.getString("phone")?.takeIf { it.isNotBlank() }?.let { "Teléfono: $it" },
+                    listOf("emergencyName", "emergencyRelation", "emergencyPhone")
+                        .mapNotNull { field -> doc.getString(field)?.takeIf { it.isNotBlank() } }
+                        .joinToString(" · ").takeIf { it.isNotBlank() }?.let { "Emergencia: $it" }
+                )
+            }
+        }
+        val uid = auth.currentUser?.uid
+        val request = if (teamId != null && uid != null) {
+            firestore.document("playerContactAccess/$uid/players/$playerId")
+                .set(mapOf("teamId" to teamId)).onSuccessTask { read() }
+        } else read()
+        request.addOnSuccessListener(onContact).addOnFailureListener {
+            onError("No se pudo consultar el contacto autorizado.")
+        }
+    }
+
     /** Carga la foto del perfil (miniatura guardada o archivo en Cloud Storage). */
     fun loadPhoto(profile: PlayerProfile, onLoaded: (Bitmap?) -> Unit) {
         when {
@@ -92,48 +163,24 @@ class PlayerProfileRepository {
         }
     }
 
-    fun listenGuardians(playerId: String, onChange: (List<GuardianLink>) -> Unit, onError: (String) -> Unit): ListenerRegistration =
-        guardians.whereEqualTo("playerId", playerId).addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                onError(error.userMessage("No se pudieron cargar los apoderados"))
-                return@addSnapshotListener
-            }
-            onChange(snapshot?.documents?.mapNotNull(::guardianFromDocument)?.sortedBy { it.guardianEmail }.orEmpty())
-        }
-
-    fun addGuardian(playerId: String, playerName: String, email: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        val normalized = email.trim().lowercase()
-        guardians.document(GuardianLink.documentId(playerId, normalized)).set(
-            mapOf(
-                "playerId" to playerId,
-                "playerName" to playerName,
-                "guardianEmail" to normalized,
-                "createdBy" to auth.currentUser?.uid,
-                "createdAt" to FieldValue.serverTimestamp()
-            )
-        ).addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { onError(it.userMessage("No se pudo vincular al padre o tutor")) }
-    }
-
-    fun removeGuardian(link: GuardianLink, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        guardians.document(link.id).delete()
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { onError(it.userMessage("No se pudo quitar al padre o tutor")) }
-    }
-
-    /** Jugadores vinculados al correo del padre o tutor que inició sesión. */
     fun listenLinkedPlayers(onChange: (List<GuardianLink>) -> Unit, onError: (String) -> Unit): ListenerRegistration? {
-        val email = auth.currentUser?.email?.trim()?.lowercase() ?: run {
-            onError("Tu cuenta no tiene un correo asociado")
+        val uid = auth.currentUser?.uid ?: run {
+            onError("Tu sesión expiró.")
             return null
         }
-        return guardians.whereEqualTo("guardianEmail", email).addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                onError(error.userMessage("No se pudieron cargar los jugadores a tu cargo"))
-                return@addSnapshotListener
+        return firestore.collection("guardianLinks")
+            .whereEqualTo("guardianId", uid)
+            .whereEqualTo("status", "ACTIVE")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error.userMessage("No se pudieron cargar los jugadores a tu cargo"))
+                    return@addSnapshotListener
+                }
+                onChange(snapshot?.documents.orEmpty().mapNotNull { doc ->
+                    val playerId = doc.getString("playerId") ?: return@mapNotNull null
+                    GuardianLink(id = doc.id, playerId = playerId, playerName = "Jugador vinculado")
+                })
             }
-            onChange(snapshot?.documents?.mapNotNull(::guardianFromDocument)?.sortedBy { it.playerName.lowercase() }.orEmpty())
-        }
     }
 
     private fun updatePhotoFields(playerId: String, fields: Map<String, Any>, onSuccess: () -> Unit, onError: (String) -> Unit) {
@@ -193,19 +240,8 @@ class PlayerProfileRepository {
         updatedAt = doc.getTimestamp("updatedAt")
     )
 
-    private fun guardianFromDocument(doc: DocumentSnapshot): GuardianLink? {
-        val playerId = doc.getString("playerId") ?: return null
-        return GuardianLink(
-            id = doc.id,
-            playerId = playerId,
-            playerName = doc.getString("playerName").orEmpty(),
-            guardianEmail = doc.getString("guardianEmail").orEmpty()
-        )
-    }
-
     companion object {
         const val PROFILES = "playerProfiles"
-        const val GUARDIANS = "playerGuardians"
         private const val MAX_PHOTO_BYTES = 2L * 1024 * 1024
         // Por debajo del límite de 800000 caracteres de las reglas de Firestore.
         private const val MAX_PHOTO_BASE64 = 700_000

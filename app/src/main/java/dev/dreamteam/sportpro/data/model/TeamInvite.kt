@@ -9,5 +9,6 @@ data class TeamInvite(
     val invitedEmail: String,
     val invitedBy: String,
     val status: String,
-    val createdAt: Timestamp?
+    val createdAt: Timestamp?,
+    val category: String = ""
 )

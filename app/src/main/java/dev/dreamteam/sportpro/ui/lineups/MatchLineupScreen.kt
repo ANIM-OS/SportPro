@@ -86,7 +86,7 @@ fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, onBack: () -> 
         confirmButton = { TextButton(enabled = editable, onClick = { perform(repository.formation(current, pendingFormation!!), "Formación guardada") }) { Text("Cambiar") } },
         dismissButton = { TextButton(enabled = !busy, onClick = { pendingFormation = null }) { Text("Cancelar") } })
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        TextButton(onClick = onBack, enabled = !busy) { Text("← Volver a convocatorias") }
+        TextButton(onClick = onBack, enabled = !busy) { Text("← Volver") }
         Text("Alineación del partido", style = MaterialTheme.typography.headlineSmall)
         current?.let { Text("vs ${it.opponent} · ${it.category}\n${dateLabel(it.kickoff.toDate().time)}") }
             ?: Text("El partido ya no está disponible")

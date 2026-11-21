@@ -14,6 +14,7 @@ import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
@@ -32,6 +33,7 @@ sealed interface AuthState {
         val message: String? = null
     ) : AuthState
     data class Error(val message: String, val isEmailError: Boolean = false) : AuthState
+    data class VerificationRequired(val message: String) : AuthState
 }
 
 private const val MAX_NAME_LENGTH = 100
@@ -61,11 +63,32 @@ class AuthViewModel : ViewModel() {
     // null mientras se consulta, para no mostrar "pendiente" a un entrenador aprobado.
     private val _coachApproved = MutableStateFlow<Boolean?>(null)
     val coachApproved: StateFlow<Boolean?> = _coachApproved.asStateFlow()
+    private val _privacyReady = MutableStateFlow(false)
+    val privacyReady: StateFlow<Boolean> = _privacyReady.asStateFlow()
+    private val _isAdmin = MutableStateFlow(false)
+    val isAdmin: StateFlow<Boolean> = _isAdmin.asStateFlow()
     private var coachApprovalListener: ListenerRegistration? = null
     private var pendingName: ProfileName? = null
+    private var pendingRegistration: Pair<String, Set<AppRole>>? = null
 
     private fun watchCoachApproval(userId: String) {
         coachApprovalListener?.remove()
+        _isAdmin.value = false
+        _privacyReady.value = false
+        firestore.document("deploymentCapabilities/us22").get(Source.SERVER).addOnSuccessListener {
+            if (auth.currentUser?.uid == userId) _privacyReady.value = true
+        }
+        firestore.document("adminAccess/$userId").get(Source.SERVER)
+            .addOnSuccessListener {
+                if (auth.currentUser?.uid == userId) _isAdmin.value = true
+            }
+            .addOnFailureListener { error ->
+                if ((error as? FirebaseFirestoreException)?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                    firestore.document("admins/$userId").get(Source.SERVER).addOnSuccessListener { admin ->
+                        if (auth.currentUser?.uid == userId) _isAdmin.value = admin.exists()
+                    }
+                }
+            }
         _coachApproved.value = null
         coachApprovalListener = firestore.collection("coachApprovals").document(userId)
             .addSnapshotListener { snapshot, error ->
@@ -109,14 +132,13 @@ class AuthViewModel : ViewModel() {
                 if (user == null) _authState.value = AuthState.Error("No se pudo crear la cuenta")
                 else {
                     pendingName = ProfileName(firstName, lastName)
+                    pendingRegistration = user.uid to parsedRoles
                     val displayName = UserProfileChangeRequest.Builder()
                         .setDisplayName("${firstName.trim()} ${lastName.trim()}")
                         .build()
-                    // Comunidad usa displayName como autor; si falla, el registro continúa.
                     user.updateProfile(displayName).addOnCompleteListener {
-                        saveProfile(user, parsedRoles)
-                            .addOnSuccessListener { finishProfile(user.uid, parsedRoles, isNewUser = true) }
-                            .addOnFailureListener { error -> recoverRegistration(user.uid, parsedRoles, error) }
+                        _sessionRoles.value = emptySet()
+                        sendVerificationEmail()
                     }
                 }
             }
@@ -173,6 +195,10 @@ class AuthViewModel : ViewModel() {
             _authState.value = AuthState.Error("Tu sesión expiró. Inicia sesión nuevamente")
             return
         }
+        if (!user.isEmailVerified) {
+            _authState.value = AuthState.VerificationRequired("Verifica tu correo antes de continuar.")
+            return
+        }
         val parsedRoles = roles.mapNotNull(AppRole::fromCode).toSet()
         if (parsedRoles.isEmpty()) {
             _authState.value = AuthState.Error("Selecciona al menos un rol válido")
@@ -225,9 +251,57 @@ class AuthViewModel : ViewModel() {
             .addOnFailureListener { error -> fail(error, "No se pudo enviar el enlace") }
     }
 
+    fun sendVerificationEmail() {
+        val user = auth.currentUser ?: run {
+            _authState.value = AuthState.Error("Tu sesión expiró. Inicia sesión nuevamente")
+            return
+        }
+        _authState.value = AuthState.Loading()
+        user.sendEmailVerification()
+            .addOnSuccessListener {
+                _authState.value = AuthState.VerificationRequired("Te enviamos un enlace de verificación. Revisa tu correo.")
+            }
+            .addOnFailureListener {
+                _authState.value = AuthState.VerificationRequired("No se pudo enviar el correo. Inténtalo nuevamente.")
+            }
+    }
+
+    fun refreshEmailVerification() {
+        val user = auth.currentUser ?: run {
+            _authState.value = AuthState.Error("Tu sesión expiró. Inicia sesión nuevamente")
+            return
+        }
+        _authState.value = AuthState.Loading()
+        user.reload().addOnSuccessListener {
+            if (!user.isEmailVerified) {
+                _authState.value = AuthState.VerificationRequired("El correo aún no está verificado.")
+            } else {
+                user.getIdToken(true)
+                    .addOnSuccessListener { resolveProfile(user.uid, false) }
+                    .addOnFailureListener { _authState.value = AuthState.VerificationRequired("No se pudo actualizar la sesión. Inténtalo de nuevo.") }
+            }
+        }.addOnFailureListener {
+            _authState.value = AuthState.VerificationRequired("No se pudo comprobar el correo. Inténtalo de nuevo.")
+        }
+    }
+
     private fun resolveProfile(userId: String?, isNewUser: Boolean) {
         if (userId == null) {
             _authState.value = AuthState.Error("No se pudo validar la sesión")
+            return
+        }
+        if (auth.currentUser?.isEmailVerified != true) {
+            _sessionRoles.value = emptySet()
+            _authState.value = AuthState.VerificationRequired("Verifica tu correo para continuar.")
+            return
+        }
+        val registrationRoles = pendingRegistration?.takeIf { it.first == userId }?.second
+        if (registrationRoles != null) {
+            val user = auth.currentUser ?: return
+            pendingRegistration = null
+            saveProfile(user, registrationRoles)
+                .addOnSuccessListener { finishProfile(userId, registrationRoles, isNewUser = true) }
+                .addOnFailureListener { recoverRegistration(userId, registrationRoles, it) }
             return
         }
         watchCoachApproval(userId)
@@ -284,6 +358,9 @@ class AuthViewModel : ViewModel() {
     fun resetState() { _authState.value = AuthState.Idle }
 
     fun clearSession() {
+        pendingRegistration = null
+        _privacyReady.value = false
+        _isAdmin.value = false
         coachApprovalListener?.remove()
         coachApprovalListener = null
         _coachApproved.value = null

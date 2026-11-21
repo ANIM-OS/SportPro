@@ -52,9 +52,10 @@ fun PlayerProfileScreen(
     onBack: () -> Unit,
     onOpenAttendance: () -> Unit,
     onOpenFees: () -> Unit,
+    onOpenGuardians: () -> Unit,
     viewModel: PlayerProfileViewModel = viewModel()
 ) {
-    LaunchedEffect(playerId) { viewModel.start(playerId, manageGuardians = isSelf) }
+    LaunchedEffect(playerId) { viewModel.start(playerId) }
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -165,11 +166,7 @@ fun PlayerProfileScreen(
                     onSave = { viewModel.save(form) }
                 )
                 if (isSelf) {
-                    GuardiansSection(
-                        guardians = uiState.guardians.map { it.guardianEmail },
-                        onAdd = { email, done -> viewModel.addGuardian(email, form.fullName.ifBlank { displayName }, done) },
-                        onRemove = { email -> uiState.guardians.firstOrNull { it.guardianEmail == email }?.let(viewModel::removeGuardian) }
-                    )
+                    OutlinedButton(onClick = onOpenGuardians) { Text("Padres y tutores") }
                 }
             } else {
                 ReadOnlyProfile(uiState.profile)
@@ -338,40 +335,4 @@ private fun ReadOnlyProfile(profile: PlayerProfile?) {
         DetailLine("Teléfono", profile.emergencyPhone)
     }
     SensitiveNote()
-}
-
-@Composable
-private fun GuardiansSection(
-    guardians: List<String>,
-    onAdd: (email: String, done: () -> Unit) -> Unit,
-    onRemove: (String) -> Unit
-) {
-    var email by rememberSaveable { mutableStateOf("") }
-    SectionLabel("PADRES O TUTORES", modifier = Modifier.padding(top = 8.dp))
-    Text(
-        text = "Los correos vinculados pueden consultar el perfil, la asistencia y las mensualidades del jugador.",
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontSize = 12.sp
-    )
-    guardians.forEach { guardianEmail ->
-        InfoCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(guardianEmail, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                IconButton(onClick = { onRemove(guardianEmail) }) {
-                    Icon(Icons.Default.Close, contentDescription = "Quitar", tint = MaterialTheme.colorScheme.error)
-                }
-            }
-        }
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        SportTextField(
-            value = email,
-            onValueChange = { email = it },
-            label = "Correo del padre o tutor",
-            keyboardType = KeyboardType.Email,
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        TextButton(onClick = { onAdd(email) { email = "" } }) { Text("Vincular") }
-    }
 }
