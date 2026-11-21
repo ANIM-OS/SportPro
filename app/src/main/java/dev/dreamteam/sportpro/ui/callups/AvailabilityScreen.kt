@@ -80,40 +80,14 @@ internal fun GuardianCallups(repository: CallupRepository) {
     var links by remember { mutableStateOf<List<GuardianLink>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
-    val user = FirebaseAuth.getInstance().currentUser
-    var verified by remember(user?.uid) { mutableStateOf(user?.isEmailVerified == true) }
-    var checking by remember { mutableStateOf(false) }
-    var verificationMessage by remember { mutableStateOf<String?>(null) }
     Text("Como padre o tutor", style = MaterialTheme.typography.titleLarge)
-    if (!verified) {
-        Text("Verifica tu correo para consultar las convocatorias de tus jugadores vinculados.")
-        TextButton(enabled = !checking && user != null, onClick = {
-            checking = true; verificationMessage = null
-            user?.sendEmailVerification()
-                ?.addOnSuccessListener { verificationMessage = "Enlace enviado a ${user.email}. Revisa también el correo no deseado." }
-                ?.addOnFailureListener { verificationMessage = "No se pudo enviar el enlace. Inténtalo de nuevo más tarde." }
-                ?.addOnCompleteListener { checking = false }
-        }) { Text("Enviar enlace de verificación") }
-        OutlinedButton(enabled = !checking && user != null, onClick = {
-            checking = true; verificationMessage = null
-            user?.reload()?.addOnSuccessListener {
-                user.getIdToken(true).addOnSuccessListener {
-                    verified = user.isEmailVerified
-                    if (!verified) verificationMessage = "El correo aún no está verificado. Abre el enlace recibido y vuelve a comprobar."
-                    checking = false
-                }.addOnFailureListener { checking = false; verificationMessage = "No se pudo actualizar la sesión." }
-            }?.addOnFailureListener { checking = false; verificationMessage = "No se pudo comprobar la verificación." }
-        }) { Text(if (checking) "Comprobando…" else "Ya verifiqué mi correo") }
-        verificationMessage?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-        return
-    }
     DisposableEffect(profiles) {
         val listener = profiles.listenLinkedPlayers({ links = it; loading = false; error = null }, { links = emptyList(); loading = false; error = it })
         onDispose { listener?.remove() }
     }
     if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-    if (!loading && links.isEmpty() && error == null) Text("No tienes jugadores vinculados. El jugador debe vincular tu correo desde su perfil.")
+    if (!loading && links.isEmpty() && error == null) Text("No tienes jugadores vinculados. Pídele al jugador que te invite desde Padres y tutores.")
     links.forEach { link -> key(link.id) { GuardianPlayerCallups(link, repository) } }
 }
 

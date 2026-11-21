@@ -37,8 +37,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -63,24 +61,32 @@ import androidx.compose.ui.unit.sp
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
 import dev.dreamteam.sportpro.data.model.Team
-import dev.dreamteam.sportpro.data.model.TeamLineup
 import dev.dreamteam.sportpro.data.model.TeamMember
 import dev.dreamteam.sportpro.domain.access.TeamAccess
 
 @Composable
-fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, canUseCoachTools: Boolean, onBack: () -> Unit, onEmailInvite: () -> Unit, onOpenTeam: (Team) -> Unit = {}) {
+fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, canUseCoachTools: Boolean, canManageOwnTeams: Boolean, privacyReady: Boolean, canLeaveTeam: Boolean, onBack: () -> Unit, onEmailInvite: () -> Unit, onOpenTeam: (Team) -> Unit = {}) {
     val state by viewModel.uiState.collectAsState()
-    val owner = TeamAccess.canManage(team, userId)
-    // Invitar, QR y alineaciones exigen aprobación; editar el equipo y su plantilla, no.
-    val approvedOwner = owner && canUseCoachTools
-    var tab by remember(team.id) { mutableStateOf(0) }
+    val owner = canManageOwnTeams && TeamAccess.canManage(team, userId)
+    // Las invitaciones y el QR requieren la aprobación del entrenador.
+    val approvedOwner = owner && canUseCoachTools && !team.archived
+    var confirmLeave by remember(team.id) { mutableStateOf(false) }
+    if (confirmLeave && canLeaveTeam) {
+        AlertDialog(
+            onDismissRequest = { confirmLeave = false },
+            title = { Text("Salir del equipo") },
+            text = { Text("Perderás el acceso al equipo. Tus registros anteriores se conservan.") },
+            confirmButton = { TextButton(onClick = { confirmLeave = false; viewModel.leaveTeam(team, onBack) }) { Text("Salir") } },
+            dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("Cancelar") } }
+        )
+    }
+    var contactPlayerId by remember(team.id) { mutableStateOf<String?>(null) }
+    contactPlayerId?.takeIf { id -> approvedOwner && state.members.any { it.userId == id } }
+        ?.let { PlayerContactDialog(it, team.id, onDismiss = { contactPlayerId = null }) }
     var category by remember(team.id) { mutableStateOf(team.categories.firstOrNull().orEmpty()) }
     var editingMember by remember { mutableStateOf<TeamMember?>(null) }
     var removingMember by remember { mutableStateOf<TeamMember?>(null) }
     var selectingAcademyTeam by remember { mutableStateOf(false) }
-    var formation by remember(team.id, category) { mutableStateOf("4-3-3") }
-    var positions by remember(team.id, category) { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var selectedSlot by remember { mutableStateOf<Int?>(null) }
     val context = LocalContext.current
 
     val photoPicker = rememberLauncherForActivityResult(
@@ -105,11 +111,6 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
     }
 
     DisposableEffect(team.id) { onDispose { viewModel.closeTeam() } }
-    LaunchedEffect(team.id, category) { if (category.isNotBlank()) viewModel.watchLineup(team, category) }
-    LaunchedEffect(state.lineup, category) {
-        formation = state.lineup?.formation ?: "4-3-3"
-        positions = state.lineup?.positions ?: emptyMap()
-    }
 
     editingMember?.let { member ->
         MemberDialog(team, member, state.managementBusy, state.managementError,
@@ -124,7 +125,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
             dismissButton = { TextButton(onClick = { removingMember = null }) { Text("Cancelar") } })
     }
     if (selectingAcademyTeam) {
-        val candidates = state.teams.filter { it.type == "EQUIPO" && it.academyId != team.id && it.createdBy == team.createdBy }
+        val candidates = state.teams.filter { it.type == "EQUIPO" && it.academyId == null && it.createdBy == team.createdBy }
         AlertDialog(onDismissRequest = { selectingAcademyTeam = false },
             title = { Text("Vincular equipo") },
             text = {
@@ -141,26 +142,11 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
             },
             confirmButton = { TextButton(onClick = { selectingAcademyTeam = false }) { Text("Cerrar") } })
     }
-    selectedSlot?.let { index ->
-        val available = state.members.filter { it.category == category &&
-            (it.userId == positions["P$index"] || it.userId !in positions.values) }
-        AlertDialog(onDismissRequest = { selectedSlot = null }, title = { Text("Elegir jugador") },
-            text = {
-                Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
-                    TextButton(onClick = { positions = positions - "P$index"; selectedSlot = null }) { Text("Sin asignar") }
-                    available.forEach { member ->
-                        TextButton(onClick = { positions = positions + ("P$index" to member.userId); selectedSlot = null }) {
-                            Text("${member.playerName}${member.jerseyNumber?.let { " · #$it" } ?: ""}")
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { selectedSlot = null }) { Text("Cancelar") } })
-    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("← Volver") }
+            if (canLeaveTeam) TextButton(onClick = { confirmLeave = true }) { Text("Salir del equipo") }
             Text(team.name, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
         Card(Modifier.fillMaxWidth()) {
@@ -223,7 +209,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
                             val code = state.joinCode!!
                             QrImage("sportpro://join/${code.id}")
                             Text("${code.teamName} · ${code.categories.joinToString(" · ")}", textAlign = TextAlign.Center)
-                            Text("Código QR estático del equipo.",
+                            Text("El entrenador debe aprobar cada solicitud.",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                         }
                         state.managementBusy -> CircularProgressIndicator()
@@ -236,11 +222,22 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
                 }
             }
         }
-        Spacer(Modifier.height(12.dp))
-        TabRow(selectedTabIndex = tab) {
-            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("PLANTILLA") })
-            Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("ALINEACIÓN") })
+        if (owner && !team.archived && state.joinRequests.isNotEmpty()) {
+            Text("Solicitudes pendientes", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+            state.joinRequests.forEach { request ->
+                Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("${request.playerName} · ${request.category}")
+                        Row {
+                            TextButton(enabled = !state.managementBusy, onClick = { viewModel.respondToJoinRequest(team, request, true) }) { Text("Aprobar") }
+                            TextButton(enabled = !state.managementBusy, onClick = { viewModel.respondToJoinRequest(team, request, false) }) { Text("Rechazar") }
+                        }
+                    }
+                }
+            }
         }
+        Spacer(Modifier.height(12.dp))
+        Text("Plantilla", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(12.dp))
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             team.categories.forEach { item ->
@@ -249,51 +246,39 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
         }
         state.managementError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (state.membersLoading) CircularProgressIndicator()
-        if (tab == 0) {
-            if (approvedOwner) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onEmailInvite) { Text("Invitar por correo") }
-                }
-                Spacer(Modifier.height(10.dp))
+        if (privacyReady && approvedOwner && team.type == "EQUIPO") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onEmailInvite) { Text("Invitar por correo") }
             }
-            val roster = state.members.filter { it.category == category }
-            Text("${roster.size} jugadores en $category", fontWeight = FontWeight.SemiBold)
-            if (roster.isEmpty()) Text("Todavía no hay jugadores en esta categoría.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            roster.forEach { member ->
-                Card(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
-                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("${member.jerseyNumber?.let { "#$it  " } ?: ""}${member.playerName}")
-                        if (owner) TextButton(onClick = { editingMember = member }) { Text("Editar") }
+            Spacer(Modifier.height(10.dp))
+        }
+        val roster = state.members.filter { it.category == category }
+        Text("${roster.size} jugadores en $category", fontWeight = FontWeight.SemiBold)
+        if (roster.isEmpty()) Text("Todavía no hay jugadores en esta categoría.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        roster.forEach { member ->
+            Card(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+                Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("${member.jerseyNumber?.let { "#$it  " } ?: ""}${member.playerName}")
+                    if (owner) {
+                        Row {
+                            if (privacyReady && approvedOwner) TextButton(onClick = { contactPlayerId = member.userId }) { Text("Contacto") }
+                            TextButton(onClick = { editingMember = member }) { Text("Editar") }
+                        }
                     }
                 }
             }
-            val uncategorized = state.members.filter { it.category.isBlank() }
-            if (uncategorized.isNotEmpty()) {
-                Spacer(Modifier.height(14.dp))
-                Text("SIN CATEGORÍA", fontWeight = FontWeight.Bold)
-                uncategorized.forEach { member ->
-                    if (owner) TextButton(onClick = { editingMember = member }) { Text("${member.playerName} · Asignar categoría") }
-                    else Text(member.playerName)
-                }
-            }
-        } else {
-            Text("FORMACIÓN BASE", style = MaterialTheme.typography.labelMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("4-3-3", "4-4-2", "3-5-2").forEach { item ->
-                    FilterChip(selected = formation == item, onClick = { if (approvedOwner) { formation = item; positions = emptyMap() } },
-                        label = { Text(item) })
-                }
-            }
-            Text(if (approvedOwner) "Toca una posición para asignar un jugador" else "Alineación guardada", style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.height(10.dp))
-            LineupPitch(formation, positions, state.members, approvedOwner) { selectedSlot = it }
-            Spacer(Modifier.height(12.dp))
-            if (approvedOwner) Button(onClick = { viewModel.saveLineup(team, TeamLineup(category, formation, positions)) },
-                enabled = !state.managementBusy && !state.lineupLoading && category.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
-                Text("Guardar alineación")
+        }
+        val uncategorized = state.members.filter { it.category.isBlank() }
+        if (uncategorized.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            Text("SIN CATEGORÍA", fontWeight = FontWeight.Bold)
+            uncategorized.forEach { member ->
+                if (owner) TextButton(onClick = { editingMember = member }) { Text("${member.playerName} · Asignar categoría") }
+                else Text(member.playerName)
             }
         }
+
     }
 }
 
@@ -318,7 +303,7 @@ private fun MemberDialog(team: Team, member: TeamMember, busy: Boolean, error: S
 }
 
 @Composable
-private fun QrImage(value: String) {
+fun QrImage(value: String) {
     val bitmap = remember(value) {
         val matrix = MultiFormatWriter().encode(value, BarcodeFormat.QR_CODE, 512, 512)
         val pixels = IntArray(512 * 512) { index ->

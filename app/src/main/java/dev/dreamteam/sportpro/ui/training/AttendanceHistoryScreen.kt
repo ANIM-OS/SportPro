@@ -39,7 +39,7 @@ fun AttendanceHistoryScreen(
             when {
                 uiState.isLoading -> item { LoadingBox() }
                 uiState.error != null -> item { MessageText(uiState.error.orEmpty()) }
-                uiState.records.isEmpty() -> item { EmptyState("Aún no hay asistencias registradas.") }
+                uiState.records.isEmpty() -> item { EmptyState("Aún no hay registros de asistencia. Aparecerán cuando el entrenador marque la asistencia de una sesión.") }
                 else -> {
                     item {
                         val playerName = uiState.records.first().playerName

@@ -19,6 +19,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +34,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -46,21 +50,19 @@ fun TeamsScreen(
     onCreateTeamClick: () -> Unit,
     canCreateTeam: Boolean,
     canJoinWithCode: Boolean,
-    canRespondAsGuardian: Boolean = false,
+    isGuardian: Boolean,
+    isCoach: Boolean,
+    privacyReady: Boolean,
+    onGuardians: () -> Unit,
     newlyCreatedTeamId: String? = null,
     onNewTeamOpened: () -> Unit = {},
     viewModel: TeamsViewModel = viewModel()
 ) {
-    var showCallupDraft by remember { mutableStateOf(false) }
-    if (showCallupDraft && (canCreateTeam || canJoinWithCode || canRespondAsGuardian)) {
-        dev.dreamteam.sportpro.ui.callups.CallupsScreen(canManage = canCreateTeam, isGuardian = canRespondAsGuardian, isPlayer = canJoinWithCode, onBack = { showCallupDraft = false })
-        return
-    }
     val uiState by viewModel.uiState.collectAsState()
     var inviteTeam by remember { mutableStateOf<Team?>(null) }
     var invitedEmail by remember { mutableStateOf("") }
     var editingTeam by remember { mutableStateOf<Team?>(null) }
-    var deletingTeam by remember { mutableStateOf<Team?>(null) }
+    var archivingTeam by remember { mutableStateOf<Team?>(null) }
     var photoTeam by remember { mutableStateOf<Team?>(null) }
     var selectedTeamId by remember { mutableStateOf<String?>(null) }
     var returnToTeamId by remember { mutableStateOf<String?>(null) }
@@ -90,7 +92,7 @@ fun TeamsScreen(
             title = { Text("Unirse a ${code.teamName}") },
             text = {
                 Column {
-                    Text("El QR se usa una sola vez. Confirma tus datos para registrarte.")
+                    Text("Envía tus datos. El entrenador revisará tu solicitud.")
                     OutlinedTextField(playerName, { playerName = it.take(80) }, label = { Text("Tu nombre") }, singleLine = true)
                     code.categories.forEach { item ->
                         FilterChip(selected = category == item, onClick = { category = item }, label = { Text(item) })
@@ -100,7 +102,7 @@ fun TeamsScreen(
             },
             confirmButton = {
                 TextButton(enabled = !uiState.managementBusy && playerName.isNotBlank() && category.isNotBlank(),
-                    onClick = { viewModel.joinWithCode(code, playerName, category) }) { Text("Registrarme") }
+                    onClick = { viewModel.joinWithCode(code, playerName, category) }) { Text("Enviar solicitud") }
             },
             dismissButton = { TextButton(onClick = viewModel::clearPendingJoinCode, enabled = !uiState.managementBusy) { Text("Cancelar") } })
     }
@@ -125,27 +127,28 @@ fun TeamsScreen(
         )
     }
 
-    deletingTeam?.let { team ->
+    archivingTeam?.let { team ->
         AlertDialog(
-            onDismissRequest = { if (uiState.deletingTeamId == null) deletingTeam = null },
-            title = { Text("Eliminar ${team.name}") },
+            onDismissRequest = { if (uiState.archivingTeamId == null) archivingTeam = null },
+            title = { Text(if (team.archived) "Reactivar ${team.name}" else "Archivar ${team.name}") },
             text = {
                 Column {
-                    Text("Se eliminarán el equipo, su foto, invitaciones y membresías. Esta acción no se puede deshacer.")
+                    Text(if (team.archived) "El equipo volverá a aceptar solicitudes y nuevas actividades." else "Se suspenderá el ingreso de jugadores y se conservarán la plantilla y el historial.")
                     uiState.teamActionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
             },
             confirmButton = {
                 TextButton(
-                    enabled = uiState.deletingTeamId == null,
-                    onClick = { viewModel.deleteTeam(team) { deletingTeam = null } }
-                ) { Text(if (uiState.deletingTeamId == team.id) "Eliminando…" else "Eliminar", color = MaterialTheme.colorScheme.error) }
+                    enabled = uiState.archivingTeamId == null,
+                    onClick = { viewModel.setTeamArchived(team, !team.archived) { archivingTeam = null } }
+                ) { Text(if (uiState.archivingTeamId == team.id) "Guardando…" else if (team.archived) "Reactivar" else "Archivar") }
             },
-            dismissButton = { TextButton(onClick = { deletingTeam = null }, enabled = uiState.deletingTeamId == null) { Text("Cancelar") } }
+            dismissButton = { TextButton(onClick = { archivingTeam = null }, enabled = uiState.archivingTeamId == null) { Text("Cancelar") } }
         )
     }
 
     inviteTeam?.let { team ->
+        var inviteCategory by remember(team.id) { mutableStateOf(team.categories.singleOrNull().orEmpty()) }
         AlertDialog(
             onDismissRequest = { if (!uiState.isInviting) inviteTeam = null },
             title = { Text("Invitar a ${team.name}") },
@@ -159,6 +162,9 @@ fun TeamsScreen(
                         label = { Text("Correo del jugador") },
                         singleLine = true
                     )
+                    team.categories.forEach { category ->
+                        FilterChip(selected = inviteCategory == category, onClick = { inviteCategory = category }, label = { Text(category) })
+                    }
                     uiState.inviteActionError?.let { error ->
                         Text(error, color = MaterialTheme.colorScheme.error)
                     }
@@ -166,9 +172,9 @@ fun TeamsScreen(
             },
             confirmButton = {
                 TextButton(
-                    enabled = invitedEmail.isNotBlank() && !uiState.isInviting,
+                    enabled = invitedEmail.isNotBlank() && inviteCategory.isNotBlank() && !uiState.isInviting,
                     onClick = {
-                        viewModel.invitePlayer(team, invitedEmail) {
+                        viewModel.invitePlayer(team, invitedEmail, inviteCategory) {
                             inviteTeam = null
                             invitedEmail = ""
                         }
@@ -186,6 +192,9 @@ fun TeamsScreen(
     if (selectedTeam != null) {
         TeamManagementScreen(selectedTeam, uiState.currentUserId, viewModel,
             canUseCoachTools = canCreateTeam,
+            canManageOwnTeams = isCoach,
+            privacyReady = privacyReady,
+            canLeaveTeam = privacyReady && canJoinWithCode && !TeamAccess.canManage(selectedTeam, uiState.currentUserId),
             onBack = {
                 selectedTeamId = returnToTeamId
                 returnToTeamId = null
@@ -207,61 +216,46 @@ fun TeamsScreen(
         // Top Header
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = if (canCreateTeam) "Mis equipos y academias" else "Equipos",
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.titleLarge,
+                text = when {
+                    canCreateTeam -> "Equipos y academias"
+                    canJoinWithCode -> "Mis equipos"
+                    else -> "Equipos"
+                },
                 modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
 
             if (canJoinWithCode) {
-                TextButton(onClick = {
-                    scanner.startScan()
-                        .addOnSuccessListener { barcode -> viewModel.loadJoinCode(barcode.rawValue.orEmpty()) }
-                        .addOnFailureListener { error -> viewModel.showManagementError(error.localizedMessage ?: "No se pudo abrir el escáner") }
-                }) { Text("Escanear QR") }
+                FilledTonalButton(
+                    onClick = {
+                        scanner.startScan()
+                            .addOnSuccessListener { barcode -> viewModel.loadJoinCode(barcode.rawValue.orEmpty()) }
+                            .addOnFailureListener { error ->
+                                viewModel.showManagementError(error.localizedMessage ?: "No se pudo abrir el escáner")
+                            }
+                    },
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp)
+                ) {
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Escanear QR")
+                }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (canCreateTeam || canJoinWithCode || canRespondAsGuardian) {
-            Card(
-                onClick = { showCallupDraft = true },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Convocatorias por partido", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text(
-                            if (canCreateTeam) "Convoca jugadores, consulta sus respuestas y arma la alineación."
-                            else if (canRespondAsGuardian) "Consulta los partidos y confirma la asistencia de tus jugadores."
-                            else "Consulta tus partidos y confirma si puedes asistir.",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            if (canCreateTeam) "Gestionar convocatorias" else "Ver convocatorias",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        if (!canCreateTeam && !uiState.emailVerified) {
+        if (canJoinWithCode && !uiState.emailVerified) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Verifica tu correo para recibir invitaciones a equipos.")
@@ -280,7 +274,7 @@ fun TeamsScreen(
             Spacer(modifier = Modifier.height(12.dp))
         }
 
-        uiState.invitesError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        uiState.requestMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         uiState.managementError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (editingTeam == null) uiState.teamActionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (inviteTeam == null) {
@@ -291,14 +285,14 @@ fun TeamsScreen(
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
-        } else if (uiState.teamsError != null) {
+        } else if (uiState.teamsError != null && uiState.teams.isEmpty() && !isGuardian) {
             Column(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = uiState.teamsError ?: "No se pudieron cargar los equipos",
+                    text = "No se pudieron cargar tus equipos.",
                     color = MaterialTheme.colorScheme.error
                 )
                 Spacer(modifier = Modifier.height(12.dp))
@@ -313,39 +307,42 @@ fun TeamsScreen(
                     .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                if (!canCreateTeam && uiState.pendingInvites.isNotEmpty()) {
-                    item { Text("INVITACIONES PENDIENTES", fontWeight = FontWeight.Bold) }
-                    items(uiState.pendingInvites, key = { "invite_${it.id}" }) { invite ->
-                        TeamInviteCard(
-                            invite = invite,
-                            alreadyMember = uiState.teams.any { it.id == invite.teamId },
-                            processing = uiState.processingInviteId == invite.id,
-                            onAccept = { viewModel.acceptInvite(invite) },
-                            onDecline = { viewModel.declineInvite(invite) }
-                        )
-                    }
-                }
-
                 items(uiState.teams, key = { "team_${it.id}" }) { team ->
                     TeamCard(
                         team = team,
-                        canManage = TeamAccess.canManage(team, uiState.currentUserId),
-                        canInvite = canCreateTeam && TeamAccess.canManage(team, uiState.currentUserId),
+                        canManage = isCoach && TeamAccess.canManage(team, uiState.currentUserId),
+                        canInvite = privacyReady && canCreateTeam && !team.archived && team.type == "EQUIPO" && TeamAccess.canManage(team, uiState.currentUserId),
                         onInvite = {
                             viewModel.clearInviteError()
                             invitedEmail = ""
                             inviteTeam = team
                         },
                         onEdit = { viewModel.clearTeamError(); editingTeam = team },
-                        onDelete = { viewModel.clearTeamError(); deletingTeam = team },
+                        onArchive = if (privacyReady && team.type == "EQUIPO") ({ viewModel.clearTeamError(); archivingTeam = team }) else null,
                         onPhoto = { photoTeam = team; photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                         isUploadingPhoto = uiState.isUploadingPhoto,
-                        isDeleting = uiState.deletingTeamId == team.id,
+                        isArchiving = uiState.archivingTeamId == team.id,
                         onManage = { selectedTeamId = team.id }
                     )
                 }
 
-                if (uiState.teams.isEmpty()) {
+                if (isGuardian) {
+                    item {
+                        OutlinedButton(onClick = onGuardians, modifier = Modifier.fillMaxWidth()) {
+                            Text("Ver jugadores vinculados")
+                        }
+                    }
+                }
+                if (uiState.teamsError != null) {
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Algunos equipos no se pudieron cargar.", modifier = Modifier.weight(1f))
+                            TextButton(onClick = viewModel::loadTeams) { Text("Reintentar") }
+                        }
+                    }
+                }
+
+                if (uiState.teams.isEmpty() && uiState.teamsError == null && (canCreateTeam || canJoinWithCode)) {
                     item {
                         if (canCreateTeam) {
                             Column(
@@ -382,10 +379,74 @@ fun TeamsScreen(
                             }
                         } else {
                             Text(
-                                text = "Aún no tienes equipos. Puedes aceptar una invitación para unirte a uno.",
+                                text = "Aún no perteneces a un equipo. Escanea el QR del entrenador para solicitar el ingreso o acepta una invitación.",
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+                }
+
+                if (canJoinWithCode && uiState.pendingInvites.isNotEmpty()) {
+                    item { Text("Invitaciones pendientes", style = MaterialTheme.typography.titleMedium) }
+                    items(uiState.pendingInvites, key = { "invite_${it.id}" }) { invite ->
+                        TeamInviteCard(
+                            invite = invite,
+                            alreadyMember = uiState.teams.any { it.id == invite.teamId },
+                            processing = uiState.processingInviteId == invite.id,
+                            onAccept = { viewModel.acceptInvite(invite) },
+                            onDecline = { viewModel.declineInvite(invite) }
+                        )
+                    }
+                }
+
+                if (canJoinWithCode && uiState.myJoinRequests.isNotEmpty()) {
+                    item { Text("Solicitudes de ingreso", style = MaterialTheme.typography.titleMedium) }
+                    items(uiState.myJoinRequests, key = { "request_${it.id}" }) { request ->
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text(request.teamName, fontWeight = FontWeight.SemiBold)
+                                Text(request.category)
+                                Text(when (request.status) {
+                                    "PENDING" -> "Pendiente de aprobación"
+                                    "APPROVED" -> "Aprobada"
+                                    "DECLINED" -> "Rechazada"
+                                    else -> "Estado no disponible"
+                                })
+                            }
+                        }
+                    }
+                }
+                if (canJoinWithCode && (uiState.myJoinRequestsError != null || uiState.invitesError != null)) {
+                    item {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surface
+                        ) {
+                            Row(
+                                Modifier.padding(start = 12.dp, end = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Info,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = when {
+                                        uiState.myJoinRequestsError == null -> "No se pudieron cargar las invitaciones"
+                                        uiState.invitesError == null -> "No se pudieron cargar las solicitudes"
+                                        else -> "No se pudieron cargar las invitaciones ni las solicitudes"
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                TextButton(onClick = viewModel::loadTeams) { Text("Reintentar") }
+                            }
                         }
                     }
                 }
@@ -429,142 +490,130 @@ fun TeamCard(
     canInvite: Boolean,
     onInvite: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit,
+    onArchive: (() -> Unit)?,
     onPhoto: () -> Unit,
     isUploadingPhoto: Boolean,
-    isDeleting: Boolean,
+    isArchiving: Boolean,
     onManage: () -> Unit
 ) {
-    val badgeColor = MaterialTheme.colorScheme.secondaryContainer
-    val textColor = MaterialTheme.colorScheme.onSecondaryContainer
+    val isAcademy = team.type == "ACADEMIA"
+    var showActions by remember { mutableStateOf(false) }
 
-    Card(
+    OutlinedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.Top
+            Column(
+                modifier = Modifier.weight(1f)
+                    .clickable(onClickLabel = if (isAcademy) "Ver academia" else "Ver plantilla", onClick = onManage)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Left side: Square Crest / Logo
-                TeamPhoto(team, onPhoto, canManage && !isUploadingPhoto && !isDeleting)
-
-                // Right side: Name, Type, City, Description
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    TeamPhoto(team, size = 56.dp, decorative = true)
+                    Column(
+                        Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
                         Text(
-                            text = team.name,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            team.name,
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 3
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
-
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = badgeColor
-                        ) {
+                        listOfNotNull(
+                            "Archivado".takeIf { team.archived },
+                            "Academia".takeIf { isAcademy },
+                            team.city.takeIf { it.isNotBlank() }
+                        ).joinToString(" · ").takeIf { it.isNotEmpty() }?.let { subtitle ->
                             Text(
-                                text = team.type,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                color = textColor,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
+                                subtitle,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
                             )
                         }
                     }
-
-                    if (team.city.isNotBlank()) {
-                        Text(
-                            text = "📍 ${team.city}",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-
-                    if (team.description.isNotBlank()) {
-                        Text(
-                            text = team.description,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 2
-                        )
-                    }
                 }
-            }
-
-            // Categories pills
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                team.categories.forEach { category ->
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant
+                if (team.categories.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = category,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(2.dp))
-
-            Button(
-                onClick = onManage,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-            ) {
-                Text("Plantilla y alineación general", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-            }
-
-            if (canManage) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (canInvite) {
-                        OutlinedButton(onClick = onInvite, enabled = !isDeleting,
-                            modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) {
-                            Text("Invitar", style = MaterialTheme.typography.labelLarge)
+                        team.categories.forEach { category ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Text(
+                                    category,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            }
                         }
                     }
-                    OutlinedButton(onClick = onPhoto, enabled = !isUploadingPhoto && !isDeleting,
-                        modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) {
-                        Text(if (isUploadingPhoto) "Subiendo…" else "Cambiar foto", style = MaterialTheme.typography.labelLarge)
-                    }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onEdit, enabled = !isDeleting,
-                        modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) {
-                        Text("Editar", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (isAcademy) "Ver academia" else "Ver plantilla",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+            if (canManage) {
+                Box(Modifier.padding(top = 8.dp, end = 8.dp)) {
+                    IconButton(onClick = { showActions = true }, enabled = !isArchiving) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Opciones de ${team.name}")
                     }
-                    OutlinedButton(onClick = onDelete, enabled = !isDeleting,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                        modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) {
-                        Text("Eliminar", style = MaterialTheme.typography.labelLarge)
+                    DropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
+                        if (canInvite) {
+                            DropdownMenuItem(text = { Text("Invitar") }, onClick = {
+                                showActions = false
+                                onInvite()
+                            })
+                        }
+                        DropdownMenuItem(
+                            text = { Text(if (isUploadingPhoto) "Subiendo foto…" else "Cambiar foto") },
+                            enabled = !isUploadingPhoto,
+                            onClick = {
+                                showActions = false
+                                onPhoto()
+                            }
+                        )
+                        DropdownMenuItem(text = { Text("Editar") }, onClick = {
+                            showActions = false
+                            onEdit()
+                        })
+                        if (onArchive != null) {
+                            DropdownMenuItem(
+                                text = { Text(if (team.archived) "Reactivar" else "Archivar") },
+                                onClick = {
+                                    showActions = false
+                                    onArchive()
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -573,7 +622,7 @@ fun TeamCard(
 }
 
 @Composable
-fun TeamPhoto(team: Team, onPhoto: (() -> Unit)? = null, canClick: Boolean = false) {
+fun TeamPhoto(team: Team, size: Dp = 76.dp, decorative: Boolean = false) {
     val image = remember(team.photoBase64) {
         if (team.photoBase64.isNotBlank()) {
             try {
@@ -587,16 +636,15 @@ fun TeamPhoto(team: Team, onPhoto: (() -> Unit)? = null, canClick: Boolean = fal
 
     Box(
         modifier = Modifier
-            .size(76.dp)
+            .size(size)
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .then(if (canClick && onPhoto != null) Modifier.clickable { onPhoto() } else Modifier),
+            .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center
     ) {
         if (image != null) {
             Image(
                 bitmap = image,
-                contentDescription = "Logo de ${team.name}",
+                contentDescription = if (decorative) null else "Logo de ${team.name}",
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
             )
@@ -683,11 +731,16 @@ private fun TeamInviteCard(
                 )
             }
             Text(
-                text = "ENTRENADOR te invitó a participar en el EQUIPO / DIVISIÓN: ${invite.teamName}",
+                text = invite.teamName,
                 color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium
             )
+            if (invite.category.isBlank()) {
+                Text("Pide al entrenador una invitación nueva con categoría.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                Text(invite.category, style = MaterialTheme.typography.bodyMedium)
+            }
             if (alreadyMember) {
                 Text(
                     text = "Ya participas en este equipo",
@@ -698,7 +751,7 @@ private fun TeamInviteCard(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = onAccept,
-                    enabled = !processing && !alreadyMember,
+                    enabled = !processing && !alreadyMember && invite.category.isNotBlank(),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp)

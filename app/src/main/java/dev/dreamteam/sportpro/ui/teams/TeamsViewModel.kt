@@ -14,13 +14,9 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Source
 import com.google.firebase.Timestamp
-import com.google.firebase.storage.FirebaseStorage
-import com.google.firebase.storage.StorageException
-import com.google.android.gms.tasks.Tasks
 import dev.dreamteam.sportpro.data.model.Team
 import dev.dreamteam.sportpro.data.model.TeamInvite
 import dev.dreamteam.sportpro.data.model.TeamJoinCode
-import dev.dreamteam.sportpro.data.model.TeamLineup
 import dev.dreamteam.sportpro.data.model.TeamMember
 import dev.dreamteam.sportpro.domain.access.TeamAccess
 import java.io.ByteArrayOutputStream
@@ -34,6 +30,8 @@ data class TeamsUiState(
     val currentUserId: String = "",
     val teams: List<Team> = emptyList(),
     val pendingInvites: List<TeamInvite> = emptyList(),
+    val myJoinRequests: List<MyJoinRequest> = emptyList(),
+    val myJoinRequestsError: String? = null,
     val emailVerified: Boolean = true,
     val isSendingVerification: Boolean = false,
     val verificationMessage: String? = null,
@@ -48,17 +46,21 @@ data class TeamsUiState(
     val teamActionError: String? = null,
     val isSavingTeam: Boolean = false,
     val isUploadingPhoto: Boolean = false,
-    val deletingTeamId: String? = null,
+    val archivingTeamId: String? = null,
     val selectedTeamId: String? = null,
     val members: List<TeamMember> = emptyList(),
     val membersLoading: Boolean = false,
-    val lineup: TeamLineup? = null,
-    val lineupLoading: Boolean = false,
     val managementError: String? = null,
     val managementBusy: Boolean = false,
     val joinCode: TeamJoinCode? = null,
-    val pendingJoinCode: TeamJoinCode? = null
+    val pendingJoinCode: TeamJoinCode? = null,
+    val joinRequests: List<TeamJoinRequest> = emptyList(),
+    val requestMessage: String? = null
 )
+
+data class MyJoinRequest(val id: String, val teamName: String, val category: String, val status: String)
+
+data class TeamJoinRequest(val id: String, val teamId: String, val playerId: String, val playerName: String, val category: String)
 
 data class TeamDetails(
     val name: String,
@@ -69,15 +71,16 @@ data class TeamDetails(
 class TeamsViewModel : ViewModel() {
     private val firestore = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
-    private val storage = FirebaseStorage.getInstance()
     private val _uiState = MutableStateFlow(TeamsUiState())
     val uiState: StateFlow<TeamsUiState> = _uiState.asStateFlow()
 
     private var ownedListener: ListenerRegistration? = null
     private var membershipsListener: ListenerRegistration? = null
+    private val memberTeamListeners = mutableMapOf<String, ListenerRegistration>()
     private var invitesListener: ListenerRegistration? = null
+    private var myRequestsListener: ListenerRegistration? = null
     private var rosterListener: ListenerRegistration? = null
-    private var lineupListener: ListenerRegistration? = null
+    private var requestsListener: ListenerRegistration? = null
     private var joinCodeListener: ListenerRegistration? = null
     private var managementGeneration = 0
     private var joinCodeGeneration = 0
@@ -106,7 +109,10 @@ class TeamsViewModel : ViewModel() {
 
         ownedListener?.remove()
         membershipsListener?.remove()
+        memberTeamListeners.values.forEach { it.remove() }
+        memberTeamListeners.clear()
         invitesListener?.remove()
+        myRequestsListener?.remove()
         val currentGeneration = ++generation
         ownedLoaded = false
         membershipsLoaded = false
@@ -123,6 +129,8 @@ class TeamsViewModel : ViewModel() {
                 emailVerified = user.isEmailVerified,
                 teams = emptyList(),
                 pendingInvites = emptyList(),
+                myJoinRequests = emptyList(),
+                myJoinRequestsError = null,
                 isLoading = true,
                 teamsError = null,
                 invitesError = null
@@ -147,15 +155,32 @@ class TeamsViewModel : ViewModel() {
                 membershipsError = error?.localizedMessage
                 if (error == null) {
                     memberTeamIds = snapshot?.documents?.mapNotNull { it.getString("teamId") }?.toSet() ?: emptySet()
+                    (memberTeamListeners.keys - memberTeamIds).forEach { id ->
+                        memberTeamListeners.remove(id)?.remove()
+                    }
                     memberTeams = memberTeams.filterKeys { it in memberTeamIds }
                     failedTeamIds = failedTeamIds.filterTo(mutableSetOf()) { it in memberTeamIds }
-                    memberTeamIds.filterNot { it in memberTeams || it in loadingTeamIds || it in failedTeamIds }
+                    memberTeamIds.filterNot { it in memberTeamListeners || it in loadingTeamIds || it in failedTeamIds }
                         .forEach { loadMemberTeam(it, currentGeneration) }
                 }
                 publishTeams()
             }
 
         if (user.isEmailVerified) {
+            myRequestsListener = firestore.collection("teamJoinRequests")
+                .whereEqualTo("playerId", user.uid)
+                .addSnapshotListener { snapshot, error ->
+                    if (currentGeneration != generation) return@addSnapshotListener
+                    if (error != null) {
+                        _uiState.update { it.copy(myJoinRequestsError = "No se pudieron cargar tus solicitudes") }
+                    } else {
+                        val requests = snapshot?.documents.orEmpty().mapNotNull { doc ->
+                            val status = doc.getString("status") ?: return@mapNotNull null
+                            MyJoinRequest(doc.id, doc.getString("teamName") ?: "Equipo", doc.getString("category").orEmpty(), status)
+                        }
+                        _uiState.update { it.copy(myJoinRequests = requests, myJoinRequestsError = null) }
+                    }
+                }
             invitesListener = firestore.collection("teamInvites")
                 .whereEqualTo("invitedEmail", email)
                 .whereEqualTo("status", "PENDING")
@@ -174,7 +199,8 @@ class TeamsViewModel : ViewModel() {
                             invitedEmail = doc.getString("invitedEmail") ?: "",
                             invitedBy = doc.getString("invitedBy") ?: "",
                             status = doc.getString("status") ?: "",
-                            createdAt = doc.getTimestamp("createdAt")
+                            createdAt = doc.getTimestamp("createdAt"),
+                            category = doc.getString("category").orEmpty()
                         )
                     } ?: emptyList()
                     _uiState.update { it.copy(pendingInvites = invites, invitesError = null) }
@@ -184,19 +210,18 @@ class TeamsViewModel : ViewModel() {
 
     private fun loadMemberTeam(teamId: String, currentGeneration: Int) {
         loadingTeamIds = loadingTeamIds + teamId
-        firestore.collection("teams").document(teamId).get()
-            .addOnSuccessListener { doc ->
-                if (currentGeneration != generation || teamId !in memberTeamIds) return@addOnSuccessListener
+        memberTeamListeners[teamId] = firestore.collection("teams").document(teamId)
+            .addSnapshotListener { doc, error ->
+                if (currentGeneration != generation || teamId !in memberTeamIds) return@addSnapshotListener
                 loadingTeamIds = loadingTeamIds - teamId
-                val team = teamFromDocument(doc)
-                if (team == null) failedTeamIds = failedTeamIds + teamId
-                else memberTeams = memberTeams + (teamId to team)
-                publishTeams()
-            }
-            .addOnFailureListener {
-                if (currentGeneration != generation || teamId !in memberTeamIds) return@addOnFailureListener
-                loadingTeamIds = loadingTeamIds - teamId
-                failedTeamIds = failedTeamIds + teamId
+                val team = doc?.let(::teamFromDocument)
+                if (error != null || team == null) {
+                    memberTeams = memberTeams - teamId
+                    failedTeamIds = failedTeamIds + teamId
+                } else {
+                    failedTeamIds = failedTeamIds - teamId
+                    memberTeams = memberTeams + (teamId to team)
+                }
                 publishTeams()
             }
     }
@@ -228,6 +253,7 @@ class TeamsViewModel : ViewModel() {
             description = doc.getString("description") ?: "",
             photoBase64 = doc.getString("photoBase64") ?: "",
             photoUpdatedAt = doc.getTimestamp("photoUpdatedAt"),
+            archived = doc.getBoolean("archived") == true,
             activeJoinCodeId = doc.getString("activeJoinCodeId"),
             createdAt = doc.getTimestamp("createdAt")
         )
@@ -242,6 +268,10 @@ class TeamsViewModel : ViewModel() {
     fun setTeamAcademy(team: Team, academyId: String?) {
         if (!owns(team) || team.type != "EQUIPO") {
             _uiState.update { it.copy(teamActionError = "Solo puedes vincular equipos que administras") }
+            return
+        }
+        if (team.academyId != null && academyId != null && team.academyId != academyId) {
+            _uiState.update { it.copy(teamActionError = "Desvincula primero la academia actual") }
             return
         }
         if (academyId != null) {
@@ -260,14 +290,33 @@ class TeamsViewModel : ViewModel() {
     }
 
     fun openTeam(team: Team) {
+        requestsListener?.remove()
         rosterListener?.remove()
-        lineupListener?.remove()
         joinCodeListener?.remove()
         joinCodeGeneration++
         val currentGeneration = ++managementGeneration
         _uiState.update {
             it.copy(selectedTeamId = team.id, members = emptyList(), membersLoading = true,
-                lineup = null, lineupLoading = false, managementError = null, joinCode = null)
+                managementError = null, joinCode = null)
+        }
+        if (owns(team)) {
+            requestsListener = firestore.collection("teamJoinRequests")
+                .whereEqualTo("teamId", team.id)
+                .addSnapshotListener { snapshot, error ->
+                    if (currentGeneration != managementGeneration) return@addSnapshotListener
+                    if (error != null) {
+                        _uiState.update { it.copy(managementError = "No se pudieron cargar las solicitudes") }
+                    } else {
+                        val requests = snapshot?.documents?.mapNotNull { doc ->
+                            if (doc.getString("status") != "PENDING") return@mapNotNull null
+                            TeamJoinRequest(doc.id, doc.getString("teamId") ?: return@mapNotNull null,
+                                doc.getString("playerId") ?: return@mapNotNull null,
+                                doc.getString("playerName") ?: return@mapNotNull null,
+                                doc.getString("category") ?: return@mapNotNull null)
+                        } ?: emptyList()
+                        _uiState.update { it.copy(joinRequests = requests) }
+                    }
+                }
         }
         rosterListener = firestore.collection("teamMemberships")
             .whereEqualTo("teamId", team.id)
@@ -290,59 +339,10 @@ class TeamsViewModel : ViewModel() {
         managementGeneration++
         joinCodeGeneration++
         rosterListener?.remove()
-        lineupListener?.remove()
         joinCodeListener?.remove()
-        _uiState.update { it.copy(selectedTeamId = null, members = emptyList(), lineup = null,
+        requestsListener?.remove()
+        _uiState.update { it.copy(selectedTeamId = null, members = emptyList(), joinRequests = emptyList(),
             joinCode = null, managementError = null) }
-    }
-
-    fun watchLineup(team: Team, category: String) {
-        lineupListener?.remove()
-        val currentGeneration = managementGeneration
-        _uiState.update { it.copy(lineup = null, lineupLoading = true, managementError = null) }
-        lineupListener = firestore.collection("teamLineups")
-            .whereEqualTo("teamId", team.id)
-            .whereEqualTo("category", category)
-            .limit(1)
-            .addSnapshotListener { snapshot, error ->
-                if (currentGeneration != managementGeneration) return@addSnapshotListener
-                if (error != null) {
-                    _uiState.update { it.copy(lineupLoading = false, managementError = error.localizedMessage ?: "No se pudo cargar la alineación") }
-                } else {
-                    val doc = snapshot?.documents?.firstOrNull()
-                    val positions = (doc?.get("positions") as? Map<*, *>)?.entries?.mapNotNull { entry ->
-                        val key = entry.key as? String ?: return@mapNotNull null
-                        val value = entry.value as? String ?: return@mapNotNull null
-                        key to value
-                    }?.toMap() ?: emptyMap()
-                    _uiState.update { it.copy(lineup = if (doc != null)
-                        TeamLineup(category, doc.getString("formation") ?: "4-3-3", positions)
-                        else null, lineupLoading = false) }
-                }
-            }
-    }
-
-    fun saveLineup(team: Team, lineup: TeamLineup) {
-        if (!owns(team) || lineup.category !in team.categories ||
-            lineup.formation !in setOf("4-3-3", "4-4-2", "3-5-2") ||
-            lineup.positions.keys.any { it !in (0..10).map { index -> "P$index" } } ||
-            lineup.positions.values.any { uid -> _uiState.value.members.none { it.userId == uid && it.category == lineup.category } } ||
-            lineup.positions.values.size != lineup.positions.values.toSet().size) {
-            _uiState.update { it.copy(managementError = "Revisa la alineación y sus jugadores") }
-            return
-        }
-        _uiState.update { it.copy(managementBusy = true, managementError = null) }
-        firestore.collection("teamLineups").document("${team.id}_${lineup.category}").set(mapOf(
-            "teamId" to team.id,
-            "category" to lineup.category,
-            "formation" to lineup.formation,
-            "positions" to lineup.positions,
-            "updatedAt" to FieldValue.serverTimestamp()
-        )).addOnSuccessListener {
-            _uiState.update { it.copy(managementBusy = false) }
-        }.addOnFailureListener { error ->
-            _uiState.update { it.copy(managementBusy = false, managementError = error.localizedMessage ?: "No se pudo guardar la alineación") }
-        }
     }
 
     fun updateMember(team: Team, member: TeamMember) {
@@ -431,7 +431,8 @@ class TeamsViewModel : ViewModel() {
         if (!owns(team)) return
         _uiState.update { it.copy(managementBusy = true, managementError = null) }
         val codeRef = firestore.collection("teamJoinCodes").document()
-        val expiresAt = Timestamp(Date(System.currentTimeMillis() + 60 * 60 * 1000L))
+        // Firestore validates the expiry against server time, so leave room for clock skew.
+        val expiresAt = Timestamp(Date(System.currentTimeMillis() + 55 * 60 * 1000L))
         val codeMap = mapOf(
             "teamId" to team.id,
             "teamName" to team.name,
@@ -502,21 +503,32 @@ class TeamsViewModel : ViewModel() {
             return
         }
         _uiState.update { it.copy(managementBusy = true, managementError = null) }
-        val batch = firestore.batch()
-        batch.set(firestore.collection("teamMemberships").document("${code.teamId}_${user.uid}"), mapOf(
-            "teamId" to code.teamId, "userId" to user.uid, "joinCodeId" to code.id,
+        firestore.collection("teamJoinRequests").document("${code.teamId}_${user.uid}").set(mapOf(
+            "teamId" to code.teamId, "teamName" to code.teamName, "playerId" to user.uid, "codeId" to code.id,
             "playerName" to playerName.trim(), "category" to category,
-            "acceptedAt" to FieldValue.serverTimestamp()
-        ))
-        batch.update(firestore.collection("teamJoinCodes").document(code.id), mapOf(
-            "usedBy" to user.uid, "usedAt" to FieldValue.serverTimestamp()
-        ))
-        batch.commit().addOnSuccessListener {
-            _uiState.update { it.copy(managementBusy = false, pendingJoinCode = null) }
-            loadTeams()
+            "status" to "PENDING", "createdAt" to FieldValue.serverTimestamp()
+        )).addOnSuccessListener {
+            _uiState.update { it.copy(managementBusy = false, pendingJoinCode = null,
+                requestMessage = "Solicitud enviada. El entrenador debe aprobarla.") }
         }.addOnFailureListener { error ->
-            _uiState.update { it.copy(managementBusy = false, managementError = error.localizedMessage ?: "No se pudo registrar en el equipo") }
+            _uiState.update { it.copy(managementBusy = false, managementError = error.localizedMessage ?: "No se pudo enviar la solicitud") }
         }
+    }
+
+    fun respondToJoinRequest(team: Team, request: TeamJoinRequest, approve: Boolean) {
+        if (!owns(team) || request.teamId != team.id || _uiState.value.managementBusy) return
+        _uiState.update { it.copy(managementBusy = true, managementError = null) }
+        val batch = firestore.batch()
+        val requestRef = firestore.collection("teamJoinRequests").document(request.id)
+        batch.update(requestRef, mapOf("status" to if (approve) "APPROVED" else "DECLINED",
+            "resolvedAt" to FieldValue.serverTimestamp()))
+        if (approve) batch.set(firestore.collection("teamMemberships").document("${team.id}_${request.playerId}"), mapOf(
+            "teamId" to team.id, "userId" to request.playerId, "requestId" to request.id,
+            "playerName" to request.playerName, "category" to request.category,
+            "acceptedAt" to FieldValue.serverTimestamp()))
+        batch.commit().addOnSuccessListener { _uiState.update { it.copy(managementBusy = false) } }
+            .addOnFailureListener { error -> _uiState.update { it.copy(managementBusy = false,
+                managementError = error.localizedMessage ?: "No se pudo resolver la solicitud") } }
     }
 
     fun saveTeamDetails(team: Team, details: TeamDetails, onSuccess: () -> Unit) {
@@ -566,138 +578,31 @@ class TeamsViewModel : ViewModel() {
             }
     }
 
-    fun deleteTeam(team: Team, onSuccess: () -> Unit) {
-        if (!owns(team) || _uiState.value.deletingTeamId != null) {
-            _uiState.update { it.copy(teamActionError = "Solo el propietario puede eliminar el equipo") }
-            return
-        }
-        if (team.type == "ACADEMIA" && _uiState.value.teams.any { it.academyId == team.id }) {
-            _uiState.update { it.copy(teamActionError = "Primero elimina o desvincula los equipos de esta academia") }
-            return
-        }
-        _uiState.update { it.copy(deletingTeamId = team.id, teamActionError = null) }
-        val failure: (Exception) -> Unit = { error ->
-            _uiState.update { it.copy(deletingTeamId = null, teamActionError = error.localizedMessage ?: "No se pudo eliminar el equipo. Puedes reintentar.") }
-        }
-        deleteRelated("teamJoinCodes", team.id, {
-          deleteRelated("teamLineups", team.id, {
-           deleteRelated("teamInvites", team.id, {
-            deleteMatchData(team.id, {
-            deleteRelated("teamMemberships", team.id, {
-                val finishDelete = {
-                    firestore.collection("teams").document(team.id).delete()
-                        .addOnSuccessListener {
-                            _uiState.update { it.copy(deletingTeamId = null) }
-                            onSuccess()
-                        }.addOnFailureListener(failure)
-                }
-                if (team.photoUpdatedAt == null || team.photoBase64.isNotEmpty()) {
-                    finishDelete()
-                } else {
-                    storage.reference.child("teams/${team.id}/profile").delete()
-                        .addOnSuccessListener { finishDelete() }
-                        .addOnFailureListener { error ->
-                            if ((error as? StorageException)?.errorCode == StorageException.ERROR_OBJECT_NOT_FOUND) finishDelete()
-                            else failure(error)
-                        }
-                }
-            }, failure)
-            }, failure)
-           }, failure)
-          }, failure)
-        }, failure)
-    }
-
-    private fun deleteMatchData(teamId: String, done: () -> Unit, failed: (Exception) -> Unit) {
-        firestore.collection("matchFixtures").whereEqualTo("teamId", teamId).get(Source.SERVER)
-            .addOnSuccessListener { snapshot ->
-                val matches = snapshot.documents
-                fun next(index: Int) {
-                    if (index == matches.size) done()
-                    else deleteMatchDataForFixture(matches[index].reference, { next(index + 1) }, failed)
-                }
-                next(0)
-            }.addOnFailureListener(failed)
-    }
-
-    private fun deleteMatchDataForFixture(
-        fixture: com.google.firebase.firestore.DocumentReference,
-        done: () -> Unit,
-        failed: (Exception) -> Unit
-    ) {
-        val lineup = firestore.collection("matchLineups").document(fixture.id)
-        fun deleteSelections() {
-            val ownerId = auth.currentUser?.uid ?: return failed(IllegalStateException("La sesión terminó"))
-            firestore.collection("matchCallupPlayers")
-                .whereEqualTo("ownerId", ownerId).whereEqualTo("matchId", fixture.id).limit(100)
-                .get(Source.SERVER).addOnSuccessListener { snapshot ->
-                    if (snapshot.isEmpty) {
-                        fixture.delete().addOnSuccessListener { done() }.addOnFailureListener(failed)
-                    } else {
-                        val responses = snapshot.documents.map { selection ->
-                            firestore.collection("matchAvailability").document(selection.id).get(Source.SERVER)
-                        }
-                        Tasks.whenAllSuccess<DocumentSnapshot>(responses).addOnSuccessListener { responseDocs ->
-                            val batch = firestore.batch()
-                            responseDocs.filter { it.exists() }.forEach { batch.delete(it.reference) }
-                            snapshot.documents.forEach { batch.delete(it.reference) }
-                            batch.commit().addOnSuccessListener { deleteSelections() }.addOnFailureListener(failed)
-                        }.addOnFailureListener(failed)
-                    }
-                }.addOnFailureListener(failed)
-        }
-        fun deleteLineup() {
-            lineup.collection("players").limit(5).get(Source.SERVER).addOnSuccessListener { snapshot ->
-                if (!snapshot.isEmpty) {
-                    val batch = firestore.batch()
-                    snapshot.documents.forEach { player ->
-                        if (player.getString("kind") == "STARTER") {
-                            player.getString("position")?.let { batch.delete(lineup.collection("slots").document(it)) }
-                        }
-                        batch.delete(player.reference)
-                    }
-                    batch.commit().addOnSuccessListener { deleteLineup() }.addOnFailureListener(failed)
-                } else {
-                    deleteRelatedLineupSlots(lineup, {
-                        lineup.get(Source.SERVER).addOnSuccessListener { parent ->
-                            if (parent.exists()) lineup.delete().addOnSuccessListener { deleteSelections() }.addOnFailureListener(failed)
-                            else deleteSelections()
-                        }.addOnFailureListener(failed)
-                    }, failed)
-                }
-            }.addOnFailureListener(failed)
-        }
-        deleteLineup()
-    }
-
-    private fun deleteRelatedLineupSlots(
-        lineup: com.google.firebase.firestore.DocumentReference,
-        done: () -> Unit,
-        failed: (Exception) -> Unit
-    ) {
-        lineup.collection("slots").limit(10).get(Source.SERVER).addOnSuccessListener { snapshot ->
-            if (snapshot.isEmpty) done()
-            else {
-                val batch = firestore.batch()
-                snapshot.documents.forEach { batch.delete(it.reference) }
-                batch.commit().addOnSuccessListener { deleteRelatedLineupSlots(lineup, done, failed) }.addOnFailureListener(failed)
+    fun setTeamArchived(team: Team, archived: Boolean, onSuccess: () -> Unit) {
+        if (!owns(team) || _uiState.value.archivingTeamId != null) return
+        _uiState.update { it.copy(archivingTeamId = team.id, teamActionError = null) }
+        firestore.collection("teams").document(team.id).update("archived", archived)
+            .addOnSuccessListener {
+                _uiState.update { it.copy(archivingTeamId = null) }
+                onSuccess()
             }
-        }.addOnFailureListener(failed)
+            .addOnFailureListener {
+                _uiState.update { state -> state.copy(archivingTeamId = null, teamActionError = "No se pudo actualizar el estado del equipo.") }
+            }
     }
 
-    private fun deleteRelated(collection: String, teamId: String, done: () -> Unit, failed: (Exception) -> Unit) {
-        firestore.collection(collection).whereEqualTo("teamId", teamId).limit(100).get(Source.SERVER)
-            .addOnSuccessListener { snapshot ->
-                if (snapshot.isEmpty) {
-                    done()
-                } else {
-                    val batch = firestore.batch()
-                    snapshot.documents.forEach { batch.delete(it.reference) }
-                    batch.commit().addOnSuccessListener {
-                        deleteRelated(collection, teamId, done, failed)
-                    }.addOnFailureListener(failed)
-                }
-            }.addOnFailureListener(failed)
+    fun leaveTeam(team: Team, onSuccess: () -> Unit) {
+        val uid = auth.currentUser?.uid ?: return
+        if (owns(team) || _uiState.value.managementBusy) return
+        _uiState.update { it.copy(managementBusy = true, managementError = null) }
+        firestore.collection("teamMemberships").document("${team.id}_$uid").delete()
+            .addOnSuccessListener {
+                _uiState.update { it.copy(managementBusy = false) }
+                onSuccess()
+            }
+            .addOnFailureListener {
+                _uiState.update { state -> state.copy(managementBusy = false, managementError = "No se pudo salir del equipo.") }
+            }
     }
 
     fun createTeam(context: Context, name: String, type: String, categories: List<String>, photoUri: Uri? = null, onSuccess: (String) -> Unit, details: TeamDetails = TeamDetails(name, "", ""), academyId: String? = null) {
@@ -788,7 +693,7 @@ class TeamsViewModel : ViewModel() {
         _uiState.update { it.copy(isCreating = false, createError = message) }
     }
 
-    fun invitePlayer(team: Team, email: String, onSuccess: () -> Unit) {
+    fun invitePlayer(team: Team, email: String, category: String, onSuccess: () -> Unit) {
         val user = auth.currentUser
         val invitedEmail = email.trim()
         if (user == null || !TeamAccess.canManage(team, user.uid)) {
@@ -799,11 +704,16 @@ class TeamsViewModel : ViewModel() {
             _uiState.update { it.copy(inviteActionError = "Ingresa el correo de otro usuario") }
             return
         }
+        if (team.type != "EQUIPO" || category !in team.categories) {
+            _uiState.update { it.copy(inviteActionError = "Selecciona una categoría del equipo") }
+            return
+        }
         _uiState.update { it.copy(isInviting = true, inviteActionError = null) }
         firestore.collection("teamInvites").add(mapOf(
             "teamId" to team.id,
             "teamName" to team.name,
             "invitedEmail" to invitedEmail,
+            "category" to category,
             "invitedBy" to user.uid,
             "status" to "PENDING",
             "createdAt" to FieldValue.serverTimestamp()
@@ -818,6 +728,10 @@ class TeamsViewModel : ViewModel() {
     fun acceptInvite(invite: TeamInvite) {
         val user = auth.currentUser ?: return
         if (!user.isEmailVerified || invite.invitedEmail != user.email || _uiState.value.processingInviteId != null) return
+        if (invite.category.isBlank()) {
+            _uiState.update { it.copy(inviteActionError = "Pide al entrenador que reenvíe la invitación con una categoría.") }
+            return
+        }
         _uiState.update { it.copy(processingInviteId = invite.id, inviteActionError = null) }
         val memberRef = firestore.collection("teamMemberships").document("${invite.teamId}_${user.uid}")
         val inviteRef = firestore.collection("teamInvites").document(invite.id)
@@ -826,6 +740,7 @@ class TeamsViewModel : ViewModel() {
             "teamId" to invite.teamId,
             "userId" to user.uid,
             "inviteId" to invite.id,
+            "category" to invite.category,
             "playerName" to ((user.displayName?.takeIf(String::isNotBlank) ?: "Jugador ${user.uid.take(6)}").take(80)),
             "acceptedAt" to FieldValue.serverTimestamp()
         ))
@@ -885,9 +800,12 @@ class TeamsViewModel : ViewModel() {
         managementGeneration++
         ownedListener?.remove()
         membershipsListener?.remove()
+        memberTeamListeners.values.forEach { it.remove() }
+        memberTeamListeners.clear()
         invitesListener?.remove()
+        myRequestsListener?.remove()
         rosterListener?.remove()
-        lineupListener?.remove()
+        requestsListener?.remove()
         joinCodeListener?.remove()
         super.onCleared()
     }

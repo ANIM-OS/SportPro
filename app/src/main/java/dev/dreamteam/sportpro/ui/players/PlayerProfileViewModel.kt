@@ -7,7 +7,6 @@ import android.util.Patterns
 import androidx.lifecycle.ViewModel
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.ListenerRegistration
-import dev.dreamteam.sportpro.data.model.GuardianLink
 import dev.dreamteam.sportpro.data.model.PlayerProfile
 import dev.dreamteam.sportpro.data.repository.PlayerProfileRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,7 +34,6 @@ data class PlayerProfileUiState(
     val photo: Bitmap? = null,
     val isSaving: Boolean = false,
     val isUploadingPhoto: Boolean = false,
-    val guardians: List<GuardianLink> = emptyList(),
     val error: String? = null,
     val formError: String? = null,
     val message: String? = null
@@ -50,12 +48,10 @@ class PlayerProfileViewModel : ViewModel() {
     val uiState: StateFlow<PlayerProfileUiState> = _uiState.asStateFlow()
 
     private var profileListener: ListenerRegistration? = null
-    private var guardiansListener: ListenerRegistration? = null
     private var playerId: String = ""
     private var loadedPhotoKey: String? = null
 
-    /** [manageGuardians] solo es true cuando el jugador ve su propio perfil. */
-    fun start(playerId: String, manageGuardians: Boolean) {
+    fun start(playerId: String) {
         if (this.playerId == playerId) return
         this.playerId = playerId
         profileListener = repository.listenProfile(
@@ -66,13 +62,6 @@ class PlayerProfileViewModel : ViewModel() {
             },
             onError = { message -> _uiState.update { it.copy(isLoading = false, error = message) } }
         )
-        if (manageGuardians) {
-            guardiansListener = repository.listenGuardians(
-                playerId = playerId,
-                onChange = { links -> _uiState.update { it.copy(guardians = links) } },
-                onError = { message -> _uiState.update { it.copy(message = message) } }
-            )
-        }
     }
 
     private fun loadPhoto(profile: PlayerProfile) {
@@ -133,43 +122,9 @@ class PlayerProfileViewModel : ViewModel() {
         )
     }
 
-    fun addGuardian(email: String, playerName: String, onAdded: () -> Unit) {
-        val clean = email.trim().lowercase()
-        val error = when {
-            !Patterns.EMAIL_ADDRESS.matcher(clean).matches() -> "Ingresa un correo válido"
-            clean == auth.currentUser?.email?.lowercase() ->
-                "Ingresa el correo de tu padre o tutor, no el tuyo"
-            _uiState.value.guardians.any { it.guardianEmail == clean } -> "Ese correo ya está vinculado"
-            else -> null
-        }
-        if (error != null) {
-            _uiState.update { it.copy(message = error) }
-            return
-        }
-        repository.addGuardian(
-            playerId = playerId,
-            playerName = playerName,
-            email = clean,
-            onSuccess = {
-                _uiState.update { it.copy(message = "Padre o tutor vinculado") }
-                onAdded()
-            },
-            onError = { message -> _uiState.update { it.copy(message = message) } }
-        )
-    }
-
-    fun removeGuardian(link: GuardianLink) {
-        repository.removeGuardian(
-            link = link,
-            onSuccess = { _uiState.update { it.copy(message = "Vínculo eliminado") } },
-            onError = { message -> _uiState.update { it.copy(message = message) } }
-        )
-    }
-
     fun clearMessage() = _uiState.update { it.copy(message = null) }
 
     override fun onCleared() {
         profileListener?.remove()
-        guardiansListener?.remove()
     }
 }

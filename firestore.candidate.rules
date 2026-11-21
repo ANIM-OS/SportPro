@@ -1,0 +1,1140 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // El rol ENTRENADOR lo elige el usuario; la aprobación solo se crea desde la consola.
+    function isApprovedCoach() {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ENTRENADOR'])
+        && exists(/databases/$(database)/documents/coachApprovals/$(request.auth.uid))
+        && get(/databases/$(database)/documents/coachApprovals/$(request.auth.uid)).data.approved == true;
+    }
+
+    // US-09. New collections only; existing team and community rules stay intact.
+    function callupOwnsTeam(teamId) {
+      return isApprovedCoach()
+        && get(/databases/$(database)/documents/teams/$(teamId)).data.createdBy == request.auth.uid;
+    }
+    function callupMember(teamId, playerId, category) {
+      let member = get(/databases/$(database)/documents/teamMemberships/$(teamId + '_' + playerId)).data;
+      return member.teamId == teamId && member.userId == playerId && member.category == category;
+    }
+    match /matchFixtures/{matchId} {
+      allow read: if request.auth != null && (
+        callupOwnsTeam(resource.data.teamId)
+        || callupMember(resource.data.teamId, request.auth.uid, resource.data.category)
+      );
+      function validFixture() {
+        let d = request.resource.data;
+        return d.keys().hasAll(['teamId', 'ownerId', 'category', 'opponent', 'kickoff', 'updatedAt'])
+          && d.keys().hasOnly(['teamId', 'ownerId', 'category', 'opponent', 'kickoff', 'responseDeadline', 'updatedAt'])
+          && d.teamId is string && d.ownerId == request.auth.uid
+          && callupOwnsTeam(d.teamId)
+          && get(/databases/$(database)/documents/teams/$(d.teamId)).data.type == 'EQUIPO'
+          && d.category is string
+          && d.category in get(/databases/$(database)/documents/teams/$(d.teamId)).data.categories
+          && d.opponent is string && d.opponent.size() > 0 && d.opponent.size() <= 100
+          && d.kickoff is timestamp && d.kickoff > request.time
+          && d.get('responseDeadline', d.kickoff) is timestamp
+          && d.get('responseDeadline', d.kickoff) > request.time
+          && d.get('responseDeadline', d.kickoff) <= d.kickoff
+          && d.updatedAt == request.time;
+      }
+      allow create: if request.auth != null && validFixture();
+      allow update: if request.auth != null && validFixture()
+        && resource.data.get('responseDeadline', resource.data.kickoff) > request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['opponent', 'kickoff', 'responseDeadline', 'updatedAt']);
+      allow delete: if false;
+    }
+    match /matchCallupPlayers/{selectionId} {
+      allow read: if request.auth != null && (
+        resource.data.playerId == request.auth.uid || resource.data.ownerId == request.auth.uid
+        || availabilityGuardian(resource.data.playerId)
+      );
+      function validSelection() {
+        let d = request.resource.data;
+        let fixture = getAfter(/databases/$(database)/documents/matchFixtures/$(d.matchId)).data;
+        return d.keys().hasAll(['matchId', 'teamId', 'ownerId', 'playerId', 'selected', 'updatedAt'])
+          && d.keys().hasOnly(['matchId', 'teamId', 'ownerId', 'playerId', 'selected', 'encounter', 'updatedAt'])
+          && d.matchId is string && d.playerId is string && d.teamId is string
+          && selectionId == d.matchId + '_' + d.playerId
+          && d.ownerId == request.auth.uid && callupOwnsTeam(d.teamId)
+          && fixture.teamId == d.teamId && fixture.ownerId == d.ownerId
+          && fixture.kickoff > request.time
+          && d.selected is bool
+          && (d.selected || !existsAfter(/databases/$(database)/documents/matchLineups/$(d.matchId)/players/$(d.playerId)))
+          && (!d.selected || (resource != null && resource.data.selected == true
+              && get(/databases/$(database)/documents/matchFixtures/$(d.matchId)).data != fixture
+              && d.diff(resource.data).affectedKeys().hasOnly(['encounter', 'updatedAt']))
+            || callupMember(d.teamId, d.playerId, fixture.category))
+          && (!d.keys().hasAny(['encounter']) || (
+            d.encounter.keys().hasAll(['opponent', 'category', 'kickoff', 'responseDeadline'])
+            && d.encounter.keys().hasOnly(['opponent', 'category', 'kickoff', 'responseDeadline'])
+            && d.encounter.opponent == fixture.opponent && d.encounter.category == fixture.category
+            && d.encounter.kickoff == fixture.kickoff
+            && d.encounter.responseDeadline == fixture.get('responseDeadline', fixture.kickoff)))
+          && d.updatedAt == request.time;
+      }
+      allow create: if request.auth != null && validSelection();
+      allow update: if request.auth != null && validSelection()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['selected', 'encounter', 'updatedAt']);
+      allow delete: if false;
+    }
+
+
+    // US-11: match-specific lineups. General teamLineups are unchanged.
+    function lineupFixture(matchId) {
+      return get(/databases/$(database)/documents/matchFixtures/$(matchId)).data;
+    }
+    function canReadMatchLineup(matchId) {
+      let fixture = lineupFixture(matchId);
+      return request.auth != null && (callupOwnsTeam(fixture.teamId)
+        || callupMember(fixture.teamId, request.auth.uid, fixture.category));
+    }
+    function canWriteMatchLineup(matchId) {
+      let fixture = lineupFixture(matchId);
+      return request.auth != null && callupOwnsTeam(fixture.teamId) && request.time < fixture.kickoff;
+    }
+    function starterPosition(position) {
+      return position in ['P0','P1','P2','P3','P4','P5','P6','P7','P8','P9','P10'];
+    }
+    match /matchLineups/{matchId} {
+      allow read: if canReadMatchLineup(matchId);
+      allow create, update: if canWriteMatchLineup(matchId)
+        && request.resource.data.keys().hasAll(['teamId','formation','updatedAt'])
+        && request.resource.data.keys().hasOnly(['teamId','formation','updatedAt'])
+        && request.resource.data.teamId == lineupFixture(matchId).teamId
+        && request.resource.data.formation in ['4-3-3','4-4-2','3-5-2']
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+      match /players/{playerId} {
+        allow read: if canReadMatchLineup(matchId);
+        function validAssignment() {
+          let d = request.resource.data;
+          let fixture = lineupFixture(matchId);
+          let callup = get(/databases/$(database)/documents/matchCallupPlayers/$(matchId + '_' + playerId)).data;
+          return d.keys().hasAll(['playerId','kind','position','updatedAt'])
+            && d.keys().hasOnly(['playerId','kind','position','updatedAt'])
+            && d.playerId == playerId
+            && callup.selected == true && callup.matchId == matchId && callup.teamId == fixture.teamId
+            && callupMember(fixture.teamId, playerId, fixture.category)
+            && getAfter(/databases/$(database)/documents/matchLineups/$(matchId)).data.formation in ['4-3-3','4-4-2','3-5-2']
+            && ((d.kind == 'STARTER' && starterPosition(d.position)
+                && getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/slots/$(d.position)).data.playerId == playerId)
+              || (d.kind == 'BENCH' && d.position in ['POR','DEF','MED','DEL']))
+            && (resource == null || resource.data.kind != 'STARTER'
+              || (d.kind == 'STARTER' && d.position == resource.data.position)
+              || !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/slots/$(resource.data.position)))
+            && d.updatedAt == request.time;
+        }
+        allow create, update: if canWriteMatchLineup(matchId) && validAssignment();
+        allow delete: if canWriteMatchLineup(matchId) && (resource.data.kind != 'STARTER'
+          || !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/slots/$(resource.data.position)));
+      }
+      match /slots/{position} {
+        allow read: if canReadMatchLineup(matchId);
+        function validSlot() {
+          let d = request.resource.data;
+          let assignment = getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(d.playerId)).data;
+          return starterPosition(position) && d.keys().hasAll(['playerId','updatedAt'])
+            && d.keys().hasOnly(['playerId','updatedAt']) && d.playerId is string
+            && assignment.playerId == d.playerId && assignment.kind == 'STARTER' && assignment.position == position
+            && (resource == null || resource.data.playerId == d.playerId
+              || !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId))
+              || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.kind != 'STARTER'
+              || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.position != position)
+            && d.updatedAt == request.time;
+        }
+        allow create, update: if canWriteMatchLineup(matchId) && validSlot();
+        allow delete: if canWriteMatchLineup(matchId) && (
+          !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId))
+          || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.kind != 'STARTER'
+          || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.position != position);
+      }
+    }
+
+    // US-10: one persistent response per selected player, shared with their authorized guardian.
+    function availabilityGuardian(playerId) {
+      return isVerifiedGuardianOf(playerId)
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['PADRE / TUTOR']);
+    }
+    function availabilityActor(playerId) {
+      return request.auth != null && (
+        (request.auth.uid == playerId
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['JUGADOR']))
+        || availabilityGuardian(playerId));
+    }
+    match /matchAvailability/{selectionId} {
+      allow get: if request.auth != null && (
+        availabilityActor(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.playerId)
+        || callupOwnsTeam(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.teamId));
+      allow list: if request.auth != null && resource.data.ownerId == request.auth.uid
+        && callupOwnsTeam(resource.data.teamId);
+      function validResponse() {
+        let d = request.resource.data;
+        let selection = get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data;
+        let fixture = get(/databases/$(database)/documents/matchFixtures/$(selection.matchId)).data;
+        return d.keys().hasAll(['matchId', 'teamId', 'ownerId', 'playerId', 'status', 'respondedBy', 'updatedAt'])
+          && d.keys().hasOnly(['matchId', 'teamId', 'ownerId', 'playerId', 'status', 'respondedBy', 'updatedAt'])
+          && selection.selected == true
+          && d.matchId == selection.matchId && d.teamId == selection.teamId
+          && d.ownerId == selection.ownerId && d.playerId == selection.playerId
+          && selectionId == d.matchId + '_' + d.playerId
+          && fixture.teamId == d.teamId
+          && callupMember(d.teamId, d.playerId, fixture.category)
+          && availabilityActor(d.playerId)
+          && request.time < fixture.get('responseDeadline', fixture.kickoff)
+          && request.time < fixture.kickoff
+          && d.status in ['AVAILABLE', 'UNAVAILABLE']
+          && d.respondedBy == request.auth.uid && d.updatedAt == request.time;
+      }
+      allow create: if request.auth != null && validResponse();
+      allow update: if request.auth != null && validResponse()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedBy', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // =========================
+    // USUARIOS
+    // =========================
+    match /users/{userId} {
+
+      allow read: if request.auth != null
+        && request.auth.uid == userId;
+
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly([
+          'email',
+          'roles',
+          'profileComplete',
+          'firstName',
+          'lastName',
+          'createdAt'
+        ])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.profileComplete == true
+        && request.resource.data.roles is list
+        && request.resource.data.roles.size() > 0
+        && request.resource.data.roles.hasOnly([
+          'JUGADOR',
+          'ENTRENADOR',
+          'PADRE / TUTOR'
+        ])
+        && (!request.resource.data.keys().hasAny(['firstName'])
+          || (request.resource.data.firstName is string
+            && request.resource.data.firstName.size() > 0
+            && request.resource.data.firstName.size() <= 100))
+        && (!request.resource.data.keys().hasAny(['lastName'])
+          || (request.resource.data.lastName is string
+            && request.resource.data.lastName.size() > 0
+            && request.resource.data.lastName.size() <= 100))
+        && (resource == null
+          ? (!request.resource.data.keys().hasAny(['createdAt'])
+            || request.resource.data.createdAt == request.time)
+          : request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null));
+
+      allow delete: if false;
+    }
+
+
+    // =========================
+    // US-18: COMUNIDAD
+    // =========================
+    match /communityPosts/{postId} {
+
+      allow read: if request.auth != null && (
+        resource.data.visibility == 'TODOS'
+        || resource.data.authorId == request.auth.uid
+        || (resource.data.visibility in ['EQUIPO', 'ACADEMIA']
+          && resource.data.teamId is string
+          && (get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
+            || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))))
+      );
+
+      // Crear publicaciones
+      allow create: if request.auth != null
+
+        // El usuario debe tener perfil registrado
+        && exists(
+          /databases/$(database)/documents/users/$(request.auth.uid)
+        )
+
+        // Solo jugador o entrenador pueden publicar actualmente
+        && get(
+          /databases/$(database)/documents/users/$(request.auth.uid)
+        ).data.roles.hasAny([
+          'JUGADOR',
+          'ENTRENADOR'
+        ])
+
+        // Solo permitimos estos campos
+        && request.resource.data.keys().hasOnly([
+          'authorId',
+          'authorName',
+          'authorRole',
+          'content',
+          'visibility',
+          'createdAt',
+          'active',
+          'moderated',
+          'teamId'
+        ])
+
+        // El autor debe ser el usuario autenticado
+        && request.resource.data.authorId == request.auth.uid
+
+        && request.resource.data.authorName is string
+
+        // Evita que el usuario se atribuya otro rol
+        && request.resource.data.authorRole in [
+          'JUGADOR',
+          'ENTRENADOR'
+        ]
+
+        && request.resource.data.authorRole in get(
+          /databases/$(database)/documents/users/$(request.auth.uid)
+        ).data.roles
+
+        // Publicar como entrenador exige aprobación
+        && (request.resource.data.authorRole != 'ENTRENADOR' || isApprovedCoach())
+
+        // Validación del contenido
+        && request.resource.data.content is string
+        && request.resource.data.content.size() > 0
+        && request.resource.data.content.size() <= 1000
+
+        // Opciones válidas de visibilidad
+        && request.resource.data.visibility in [
+          'TODOS',
+          'EQUIPO',
+          'ACADEMIA'
+        ]
+
+        && ((request.resource.data.visibility == 'TODOS' && !request.resource.data.keys().hasAny(['teamId']))
+          || (request.resource.data.visibility in ['EQUIPO', 'ACADEMIA']
+            && request.resource.data.teamId is string
+            && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.type == request.resource.data.visibility
+            && (get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.createdBy == request.auth.uid
+              || exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.auth.uid)))))
+
+        // Fecha generada por Firebase
+        && request.resource.data.createdAt == request.time
+
+        // Una publicación nueva siempre comienza activa
+        && request.resource.data.active == true
+        && request.resource.data.moderated == false;
+
+      // Un moderador designado o un administrador puede ocultar una publicación sin alterar su contenido.
+      allow update: if request.auth != null
+        && (exists(/databases/$(database)/documents/moderators/$(request.auth.uid)) || isAdmin())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderated'])
+        && resource.data.moderated == false
+        && request.resource.data.moderated == true;
+      allow delete: if false;
+    }
+
+    match /moderators/{moderatorId} {
+      allow get: if request.auth != null && request.auth.uid == moderatorId;
+      allow list, write: if false;
+    }
+
+    // =========================
+    // ADMINISTRADORES Y APROBACIÓN DE ENTRENADORES (se gestionan desde la consola)
+    // =========================
+    match /admins/{adminId} {
+      allow read, write: if false;
+    }
+
+    match /coachApprovals/{coachId} {
+      allow get: if request.auth != null && request.auth.uid == coachId;
+      allow list, write: if false;
+    }
+
+    // =========================
+    // US-20: AVISOS DE PRUEBAS Y CONVOCATORIAS
+    // Vigente o vencido se calcula en la app con deadline (plan Spark, sin Cloud Functions).
+    // =========================
+    match /tryoutNotices/{noticeId} {
+      allow read: if request.auth != null;
+
+      allow create: if isApprovedCoach()
+        && request.resource.data.keys().hasAll([
+          'authorId', 'authorName', 'title', 'description', 'status', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'authorId', 'authorName', 'title', 'description', 'category', 'position',
+          'tryoutDate', 'location', 'deadline', 'status', 'createdAt'
+        ])
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.authorName is string
+        && request.resource.data.authorName.size() > 0
+        && request.resource.data.authorName.size() <= 100
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 100
+        && request.resource.data.description is string
+        && request.resource.data.description.size() > 0
+        && request.resource.data.description.size() <= 2000
+        // Mismas listas que SportCatalog en la app
+        && (!request.resource.data.keys().hasAny(['category'])
+          || request.resource.data.category in [
+            'SUB-10', 'SUB-12', 'SUB-15', 'SUB-17', 'PRIMERA', 'FEMENIL-SUB-15', 'FEMENIL-SUB-17'
+          ])
+        && (!request.resource.data.keys().hasAny(['position'])
+          || request.resource.data.position in [
+            'Portero', 'Defensa central', 'Lateral', 'Mediocampista', 'Extremo', 'Delantero'
+          ])
+        && (!request.resource.data.keys().hasAny(['location'])
+          || (request.resource.data.location is string
+            && request.resource.data.location.size() > 0
+            && request.resource.data.location.size() <= 120))
+        && (!request.resource.data.keys().hasAny(['tryoutDate'])
+          || request.resource.data.tryoutDate is timestamp)
+        // No se puede publicar un aviso ya vencido
+        && (!request.resource.data.keys().hasAny(['deadline'])
+          || (request.resource.data.deadline is timestamp
+            && request.resource.data.deadline > request.time))
+        // La app exige fecha límite <= día de la prueba; el margen cubre zonas horarias
+        && (!request.resource.data.keys().hasAll(['deadline', 'tryoutDate'])
+          || request.resource.data.deadline <= request.resource.data.tryoutDate + duration.value(2, 'd'))
+        && request.resource.data.status == 'ACTIVE'
+        && request.resource.data.createdAt == request.time;
+
+      // Solo se puede cancelar: lo hace el autor (aunque ya no esté aprobado) o un administrador.
+      allow update: if request.auth != null
+        && (resource.data.authorId == request.auth.uid || isAdmin())
+        && resource.data.status == 'ACTIVE'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt'])
+        && request.resource.data.status == 'CANCELLED'
+        && request.resource.data.cancelledAt == request.time;
+
+      allow delete: if false;
+    }
+
+    // =========================
+    // EQUIPOS Y ACADEMIAS
+    // =========================
+    function guardianCanReadTeam(teamId) {
+      let access = get(/databases/$(database)/documents/guardianTeamAccess/$(teamId + '_' + request.auth.uid)).data;
+      return access.teamId == teamId && access.guardianId == request.auth.uid
+        && isVerifiedGuardianOf(access.playerId)
+        && exists(/databases/$(database)/documents/teamMemberships/$(teamId + '_' + access.playerId));
+    }
+    match /guardianTeamAccess/{accessId} {
+      allow read: if request.auth != null && resource.data.guardianId == request.auth.uid;
+      function validAccess() {
+        let d = request.resource.data;
+        return request.auth != null && d.keys().hasAll(['teamId','playerId','guardianId'])
+          && d.keys().hasOnly(['teamId','playerId','guardianId'])
+          && d.teamId is string && d.playerId is string && d.guardianId == request.auth.uid
+          && accessId == d.teamId + '_' + request.auth.uid
+          && isVerifiedGuardianOf(d.playerId)
+          && exists(/databases/$(database)/documents/teamMemberships/$(d.teamId + '_' + d.playerId));
+      }
+      allow create, update: if validAccess();
+      allow delete: if request.auth != null && resource.data.guardianId == request.auth.uid;
+    }
+
+    match /teams/{teamId} {
+      // La lista solo puede consultar equipos creados por el usuario.
+      allow list: if request.auth != null
+        && (resource.data.createdBy == request.auth.uid
+          || feeAcademyOwner(resource.data.get('academyId', '')));
+
+      // Un miembro aceptado puede abrir su equipo por ID.
+      allow get: if request.auth != null && (
+        resource.data.createdBy == request.auth.uid
+        || exists(/databases/$(database)/documents/teamMemberships/$(teamId + '_' + request.auth.uid))
+        || feeAcademyOwner(resource.data.get('academyId', ''))
+        || guardianCanReadTeam(teamId)
+      );
+
+      allow create: if isApprovedCoach()
+        && request.resource.data.keys().hasOnly([
+          'createdBy', 'name', 'type', 'categories', 'playerCount', 'createdAt',
+          'city', 'description', 'primaryColor', 'secondaryColor', 'foundedYear',
+          'photoBase64', 'photoUpdatedAt', 'academyId'
+        ])
+        && validOwnedAcademy()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.type in ['EQUIPO', 'ACADEMIA']
+        && request.resource.data.categories is list
+        && request.resource.data.categories.size() > 0
+        && (!request.resource.data.keys().hasAny(['playerCount'])
+          || request.resource.data.playerCount == 0)
+        && request.resource.data.createdAt == request.time
+        && validTeamDetails();
+
+      function validOwnedAcademy() {
+        return !request.resource.data.keys().hasAny(['academyId'])
+          || (request.resource.data.type == 'EQUIPO'
+            && request.resource.data.academyId is string
+            && get(/databases/$(database)/documents/teams/$(request.resource.data.academyId)).data.type == 'ACADEMIA'
+            && (get(/databases/$(database)/documents/teams/$(request.resource.data.academyId)).data.createdBy == request.auth.uid
+              || (resource != null && resource.data.get('academyId', '') == request.resource.data.academyId)));
+      }
+
+      allow update: if request.auth != null && resource.data.type == 'EQUIPO'
+        && resource.data.createdBy == request.auth.uid
+        && !resource.data.keys().hasAny(['academyId'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['academyId','academyInviteId'])
+        && request.resource.data.academyId is string && request.resource.data.academyInviteId is string
+        && get(/databases/$(database)/documents/academyInvites/$(request.resource.data.academyInviteId)).data.status == 'PENDING'
+        && get(/databases/$(database)/documents/academyInvites/$(request.resource.data.academyInviteId)).data.expiresAt > request.time
+        && getAfter(/databases/$(database)/documents/academyInvites/$(request.resource.data.academyInviteId)).data.status == 'ACCEPTED'
+        && getAfter(/databases/$(database)/documents/academyInvites/$(request.resource.data.academyInviteId)).data.teamId == teamId
+        && getAfter(/databases/$(database)/documents/academyInvites/$(request.resource.data.academyInviteId)).data.coachId == request.auth.uid
+        && getAfter(/databases/$(database)/documents/academyInvites/$(request.resource.data.academyInviteId)).data.academyId == request.resource.data.academyId;
+      allow update: if request.auth != null && resource.data.keys().hasAny(['academyId'])
+        && (resource.data.createdBy == request.auth.uid
+          || get(/databases/$(database)/documents/teams/$(resource.data.academyId)).data.createdBy == request.auth.uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['academyId','academyInviteId'])
+        && !request.resource.data.keys().hasAny(['academyId','academyInviteId']);
+
+      function validTeamDetails() {
+        return (!request.resource.data.keys().hasAny(['city'])
+            || (request.resource.data.city is string && request.resource.data.city.size() <= 80))
+          && (!request.resource.data.keys().hasAny(['description'])
+            || (request.resource.data.description is string && request.resource.data.description.size() <= 500))
+          && (!request.resource.data.keys().hasAny(['primaryColor'])
+            || (request.resource.data.primaryColor is string && request.resource.data.primaryColor.size() <= 30))
+          && (!request.resource.data.keys().hasAny(['secondaryColor'])
+            || (request.resource.data.secondaryColor is string && request.resource.data.secondaryColor.size() <= 30))
+          && (!request.resource.data.keys().hasAny(['foundedYear'])
+            || (request.resource.data.foundedYear is int
+              && request.resource.data.foundedYear >= 1850
+              && request.resource.data.foundedYear <= 2100))
+          && (!request.resource.data.keys().hasAny(['photoBase64'])
+            || (request.resource.data.photoBase64 is string
+              && request.resource.data.photoBase64.size() <= 800000))
+          && (!request.resource.data.keys().hasAny(['photoUpdatedAt'])
+            || request.resource.data.photoUpdatedAt is timestamp);
+      }
+
+      allow update: if request.auth != null
+        && resource.data.createdBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'type', 'categories', 'city', 'description',
+          'primaryColor', 'secondaryColor', 'foundedYear',
+          'photoBase64', 'photoUpdatedAt', 'academyId'
+        ])
+        && validOwnedAcademy()
+        && (!resource.data.keys().hasAny(['academyId'])
+          || !request.resource.data.keys().hasAny(['academyId'])
+          || resource.data.academyId == request.resource.data.academyId)
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.type in ['EQUIPO', 'ACADEMIA']
+        && request.resource.data.categories is list
+        && request.resource.data.categories.size() > 0
+        && validTeamDetails()
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['photoUpdatedAt'])
+          || request.resource.data.photoUpdatedAt == request.time);
+      allow delete: if request.auth != null
+        && resource.data.createdBy == request.auth.uid;
+    }
+
+    match /academyInvites/{inviteId} {
+      allow read: if request.auth != null && (resource.data.academyOwnerId == request.auth.uid || resource.data.coachId == request.auth.uid);
+      function validInvite() {
+        let d = request.resource.data;
+        return request.auth != null && d.keys().hasAll(['academyId','teamId','academyOwnerId','coachId','status','createdAt','expiresAt'])
+          && d.keys().hasOnly(['academyId','academyName','teamId','academyOwnerId','coachId','status','createdAt','expiresAt'])
+          && (!d.keys().hasAny(['academyName']) || d.academyName == get(/databases/$(database)/documents/teams/$(d.academyId)).data.name)
+          && d.academyId is string && d.teamId is string && d.coachId is string
+          && d.academyOwnerId == request.auth.uid
+          && get(/databases/$(database)/documents/teams/$(d.academyId)).data.type == 'ACADEMIA'
+          && get(/databases/$(database)/documents/teams/$(d.academyId)).data.createdBy == request.auth.uid
+          && get(/databases/$(database)/documents/teams/$(d.teamId)).data.type == 'EQUIPO'
+          && get(/databases/$(database)/documents/teams/$(d.teamId)).data.createdBy == d.coachId
+          && !get(/databases/$(database)/documents/teams/$(d.teamId)).data.keys().hasAny(['academyId'])
+          && d.status == 'PENDING' && d.createdAt == request.time
+          && d.expiresAt is timestamp && d.expiresAt > request.time
+          && d.expiresAt < request.time + duration.value(7, 'd');
+      }
+      allow create: if validInvite();
+      allow update: if request.auth != null && resource.data.status == 'PENDING'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','resolvedAt'])
+        && request.resource.data.resolvedAt == request.time
+        && ((resource.data.academyOwnerId == request.auth.uid && request.resource.data.status == 'CANCELLED')
+          || (resource.data.coachId == request.auth.uid && request.resource.data.status == 'DECLINED')
+          || (resource.data.coachId == request.auth.uid && request.resource.data.status == 'ACCEPTED'
+            && resource.data.expiresAt > request.time
+            && getAfter(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.academyInviteId == inviteId
+            && getAfter(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.academyId == resource.data.academyId));
+      allow delete: if false;
+    }
+
+    match /teamInvites/{inviteId} {
+      allow read: if request.auth != null && (
+        (request.auth.token.email_verified == true
+          && resource.data.invitedEmail == request.auth.token.email)
+        || get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
+      );
+
+      allow create: if isApprovedCoach()
+        && request.resource.data.keys().hasOnly([
+          'teamId', 'teamName', 'invitedEmail', 'invitedBy', 'status', 'createdAt'
+        ])
+        && request.resource.data.teamId is string
+        && request.resource.data.teamName is string
+        && request.resource.data.invitedEmail is string
+        && request.resource.data.invitedEmail.size() > 3
+        && request.resource.data.invitedEmail.size() <= 254
+        && request.resource.data.invitedEmail != request.auth.token.email
+        && request.resource.data.invitedBy == request.auth.uid
+        && request.resource.data.status == 'PENDING'
+        && request.resource.data.createdAt == request.time
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.createdBy == request.auth.uid
+        && request.resource.data.teamName == get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.name;
+
+      allow update: if request.auth != null
+        && request.auth.token.email_verified == true
+        && resource.data.invitedEmail == request.auth.token.email
+        && resource.data.status == 'PENDING'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.status in ['ACCEPTED', 'DECLINED'];
+      allow delete: if request.auth != null
+        && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid;
+    }
+
+    match /teamMemberships/{membershipId} {
+      allow read: if request.auth != null && (
+        resource.data.userId == request.auth.uid
+        || isVerifiedGuardianOf(resource.data.userId)
+        || feeAcademyOwner(get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.get('academyId', ''))
+        || get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
+        || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))
+      );
+
+      allow create: if request.auth != null
+        && request.auth.token.email_verified == true
+        && request.resource.data.keys().hasOnly([
+          'teamId', 'userId', 'inviteId', 'joinCodeId', 'acceptedAt',
+          'playerName', 'category', 'jerseyNumber'
+        ])
+        && request.resource.data.teamId is string
+        && request.resource.data.userId == request.auth.uid
+        && membershipId == request.resource.data.teamId + '_' + request.auth.uid
+        && request.resource.data.acceptedAt == request.time
+        && (!request.resource.data.keys().hasAny(['playerName'])
+          || (request.resource.data.playerName is string
+            && request.resource.data.playerName.size() > 0
+            && request.resource.data.playerName.size() <= 80))
+        && (!request.resource.data.keys().hasAny(['category'])
+          || (request.resource.data.category is string
+            && request.resource.data.category in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.categories))
+        && (!request.resource.data.keys().hasAny(['jerseyNumber'])
+          || (request.resource.data.jerseyNumber is int
+            && request.resource.data.jerseyNumber >= 0
+            && request.resource.data.jerseyNumber <= 99))
+        && (
+          (request.resource.data.keys().hasAny(['inviteId'])
+            && !request.resource.data.keys().hasAny(['joinCodeId'])
+            && request.resource.data.inviteId is string
+            && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.status == 'ACCEPTED'
+            && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.teamId == request.resource.data.teamId
+            && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.invitedEmail == request.auth.token.email)
+
+        );
+
+      // La aprobación y la membresía se escriben juntas.
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(['teamId','userId','requestId','playerName','category','acceptedAt'])
+        && request.resource.data.keys().hasOnly(['teamId','userId','requestId','playerName','category','acceptedAt'])
+        && request.resource.data.teamId is string && request.resource.data.userId is string
+        && request.resource.data.requestId is string
+        && membershipId == request.resource.data.teamId + '_' + request.resource.data.userId
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.createdBy == request.auth.uid
+        && get(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.status == 'PENDING'
+        && getAfter(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.status == 'APPROVED'
+        && getAfter(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.teamId == request.resource.data.teamId
+        && getAfter(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.playerId == request.resource.data.userId
+        && getAfter(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.playerName == request.resource.data.playerName
+        && getAfter(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.category == request.resource.data.category
+        && request.resource.data.category in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.categories
+        && request.resource.data.acceptedAt == request.time;
+
+      allow update: if request.auth != null
+        && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['playerName', 'category', 'jerseyNumber'])
+        && request.resource.data.playerName is string
+        && request.resource.data.playerName.size() > 0
+        && request.resource.data.playerName.size() <= 80
+        && request.resource.data.category in get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.categories
+        && (!request.resource.data.keys().hasAny(['jerseyNumber'])
+          || (request.resource.data.jerseyNumber is int
+            && request.resource.data.jerseyNumber >= 0
+            && request.resource.data.jerseyNumber <= 99));
+      allow delete: if request.auth != null
+        && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid;
+    }
+
+    match /teamJoinRequests/{requestId} {
+      allow read: if request.auth != null && (
+        resource.data.playerId == request.auth.uid
+        || get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid);
+      function validNewRequest() {
+        return request.auth != null && request.auth.token.email_verified == true
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['JUGADOR'])
+        && request.resource.data.keys().hasAll(['teamId','playerId','codeId','playerName','category','status','createdAt'])
+        && request.resource.data.keys().hasOnly(['teamId','teamName','playerId','codeId','playerName','category','status','createdAt'])
+        && request.resource.data.teamId is string && request.resource.data.codeId is string
+        && request.resource.data.playerId == request.auth.uid
+        && requestId == request.resource.data.teamId + '_' + request.auth.uid
+        && request.resource.data.playerName is string && request.resource.data.playerName.size() > 0
+        && request.resource.data.playerName.size() <= 80
+        && request.resource.data.category is string
+        && request.resource.data.category in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.categories
+        && (!request.resource.data.keys().hasAny(['teamName']) ||
+          request.resource.data.teamName == get(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.codeId)).data.teamName)
+        && get(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.codeId)).data.teamId == request.resource.data.teamId
+        && get(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.codeId)).data.expiresAt > request.time
+        && !get(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.codeId)).data.keys().hasAny(['usedBy'])
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.type == 'EQUIPO'
+        && !exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.auth.uid))
+        && request.resource.data.status == 'PENDING' && request.resource.data.createdAt == request.time;
+      }
+      allow create: if validNewRequest();
+      allow update: if resource.data.status in ['DECLINED', 'APPROVED']
+        && resource.data.playerId == request.auth.uid && validNewRequest();
+      allow update: if request.auth != null && resource.data.status == 'PENDING'
+        && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','resolvedAt'])
+        && request.resource.data.status in ['APPROVED','DECLINED']
+        && request.resource.data.resolvedAt == request.time
+        && (request.resource.data.status == 'DECLINED' ||
+          (getAfter(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + resource.data.playerId)).data.requestId == requestId
+           && getAfter(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + resource.data.playerId)).data.userId == resource.data.playerId));
+      allow delete: if false;
+    }
+
+    match /teamJoinCodes/{codeId} {
+      allow get: if request.auth != null && (
+        get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
+        || (request.auth.token.email_verified == true
+          && resource.data.expiresAt > request.time
+          && !resource.data.keys().hasAny(['usedBy'])
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['JUGADOR']))
+      );
+      allow list: if request.auth != null
+        && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid;
+      allow create: if isApprovedCoach()
+        && request.resource.data.keys().hasOnly(['teamId', 'teamName', 'categories', 'createdBy', 'createdAt', 'expiresAt'])
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.teamId is string
+        && request.resource.data.teamName == get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.name
+        && request.resource.data.categories == get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.categories
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt < request.time + duration.value(1, 'h');
+      allow update: if false;
+      allow delete: if request.auth != null
+        && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid;
+    }
+
+    match /teamLineups/{lineupId} {
+      allow read: if request.auth != null && (
+        get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
+        || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))
+      );
+      function validLineup() {
+        return request.resource.data.keys().hasOnly(['teamId', 'category', 'formation', 'positions', 'updatedAt'])
+          && request.resource.data.teamId is string
+          && request.resource.data.category is string
+          && lineupId == request.resource.data.teamId + '_' + request.resource.data.category
+          && request.resource.data.category in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.categories
+          && request.resource.data.formation in ['4-3-3', '4-4-2', '3-5-2']
+          && request.resource.data.positions is map
+          && request.resource.data.positions.keys().hasOnly([
+            'P0', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10'
+          ])
+          && request.resource.data.updatedAt == request.time;
+      }
+      allow create, update: if isApprovedCoach()
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.createdBy == request.auth.uid
+        && validLineup();
+      allow delete: if request.auth != null
+        && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid;
+    }
+
+
+    // =========================
+    // US-22: PRIVACIDAD Y VISIBILIDAD DE DATOS (Fichas de Jugadores)
+    // =========================
+    match /playerProfiles/{playerId} {
+
+      // La ficha existente mezcla campos privados: se reserva al titular.
+      allow read: if request.auth != null && request.auth.uid == playerId;
+
+      // US-04: miniatura de la foto guardada en el documento (plan Spark, sin Cloud Storage).
+      function validPlayerPhoto() {
+        return !request.resource.data.keys().hasAny(['photoBase64'])
+          || (request.resource.data.photoBase64 is string
+            && request.resource.data.photoBase64.size() <= 800000);
+      }
+
+      allow create, update: if request.auth != null && request.auth.uid == playerId && validPlayerPhoto();
+
+      allow delete: if false;
+    }
+
+
+    // =========================
+    // US-04 a US-08: ENTRENAMIENTOS Y JUGADORES
+    // =========================
+
+    function ownsTeam(teamId) {
+      return get(/databases/$(database)/documents/teams/$(teamId)).data.createdBy == request.auth.uid;
+    }
+
+    // Los vínculos antiguos por correo no conceden acceso; solo cuentan los UID confirmados.
+    function isVerifiedGuardianOf(playerId) {
+      return request.auth != null && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/guardianLinks/$(playerId + '_' + request.auth.uid))
+        && get(/databases/$(database)/documents/guardianLinks/$(playerId + '_' + request.auth.uid)).data.status == 'ACTIVE';
+    }
+
+    match /guardianInvites/{inviteId} {
+      allow get: if request.auth != null && request.auth.token.email_verified == true
+        && (resource.data.playerId == request.auth.uid
+          || resource.data.get('guardianId', '') == request.auth.uid
+          || (resource.data.status == 'OPEN' && resource.data.expiresAt > request.time));
+      allow list: if request.auth != null
+        && (resource.data.playerId == request.auth.uid || resource.data.get('guardianId', '') == request.auth.uid);
+      allow create: if request.auth != null && request.auth.token.email_verified == true
+        && request.resource.data.keys().hasAll(['playerId','playerName','status','createdAt','expiresAt'])
+        && request.resource.data.keys().hasOnly(['playerId','playerName','status','createdAt','expiresAt'])
+        && request.resource.data.playerId == request.auth.uid
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['JUGADOR'])
+        && request.resource.data.playerName is string && request.resource.data.playerName.size() > 0
+        && request.resource.data.playerName.size() <= 80 && request.resource.data.status == 'OPEN'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.expiresAt is timestamp && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt < request.time + duration.value(1, 'h');
+      // El primer tutor que acepta queda ligado a la invitación; el jugador debe confirmar.
+      allow update: if request.auth != null && request.auth.token.email_verified == true
+        && resource.data.status == 'OPEN' && resource.data.expiresAt > request.time
+        && request.auth.uid != resource.data.playerId
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['PADRE / TUTOR'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','guardianId','guardianName','claimedAt'])
+        && request.resource.data.status == 'CLAIMED' && request.resource.data.guardianId == request.auth.uid
+        && request.resource.data.guardianName is string && request.resource.data.guardianName.size() > 0
+        && request.resource.data.guardianName.size() <= 80
+        && request.auth.token.name is string && request.resource.data.guardianName == request.auth.token.name
+        && request.resource.data.claimedAt == request.time;
+      allow update: if request.auth != null && resource.data.status == 'CLAIMED'
+        && resource.data.playerId == request.auth.uid && resource.data.expiresAt > request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','resolvedAt'])
+        && request.resource.data.status == 'ACTIVE' && request.resource.data.resolvedAt == request.time
+        && getAfter(/databases/$(database)/documents/guardianLinks/$(resource.data.playerId + '_' + resource.data.guardianId)).data.inviteId == inviteId
+        && getAfter(/databases/$(database)/documents/guardianLinks/$(resource.data.playerId + '_' + resource.data.guardianId)).data.status == 'ACTIVE';
+      allow update: if request.auth != null && resource.data.status in ['OPEN','CLAIMED']
+        && (resource.data.playerId == request.auth.uid
+          || (resource.data.status == 'CLAIMED' && resource.data.guardianId == request.auth.uid))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','resolvedAt'])
+        && request.resource.data.status == 'CANCELLED' && request.resource.data.resolvedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /guardianLinks/{linkId} {
+      allow read: if request.auth != null && (resource.data.playerId == request.auth.uid || resource.data.guardianId == request.auth.uid);
+      function validActivation() {
+        let d = request.resource.data;
+        let invite = get(/databases/$(database)/documents/guardianInvites/$(d.inviteId)).data;
+        return request.auth != null && d.keys().hasAll(['playerId','guardianId','inviteId','status','activatedAt'])
+          && d.keys().hasOnly(['playerId','guardianId','inviteId','status','activatedAt'])
+          && d.playerId == request.auth.uid && d.guardianId is string && d.inviteId is string
+          && linkId == d.playerId + '_' + d.guardianId && d.status == 'ACTIVE' && d.activatedAt == request.time
+          && invite.status == 'CLAIMED' && invite.expiresAt > request.time
+          && invite.playerId == d.playerId && invite.guardianId == d.guardianId
+          && getAfter(/databases/$(database)/documents/guardianInvites/$(d.inviteId)).data.status == 'ACTIVE';
+      }
+      allow create: if validActivation();
+      allow update: if resource.data.status == 'REVOKED' && validActivation();
+      allow update: if request.auth != null && resource.data.status == 'ACTIVE'
+        && (resource.data.playerId == request.auth.uid || resource.data.guardianId == request.auth.uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','revokedAt','revokedBy'])
+        && request.resource.data.status == 'REVOKED' && request.resource.data.revokedBy == request.auth.uid
+        && request.resource.data.revokedAt == request.time;
+      allow delete: if false;
+    }
+
+    // US-04: vínculos jugador - padre o tutor. Solo el propio jugador los crea o elimina.
+    match /playerGuardians/{linkId} {
+      allow read: if request.auth != null && (
+        resource.data.playerId == request.auth.uid
+        || (request.auth.token.email_verified == true
+          && resource.data.guardianEmail == request.auth.token.email.lower())
+      );
+      allow create: if false;
+      allow update: if false;
+      allow delete: if request.auth != null && resource.data.playerId == request.auth.uid;
+    }
+
+    // US-07: biblioteca de ejercicios; cada entrenador administra los suyos.
+    match /exercises/{exerciseId} {
+      function validExercise() {
+        return request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 80
+          && request.resource.data.description is string
+          && request.resource.data.description.size() <= 500
+          && request.resource.data.durationMinutes is int
+          && request.resource.data.durationMinutes >= 1
+          && request.resource.data.durationMinutes <= 180;
+      }
+
+      allow read: if request.auth != null && resource.data.createdBy == request.auth.uid;
+      allow create: if isApprovedCoach()
+        && request.resource.data.keys().hasOnly(['createdBy', 'name', 'description', 'durationMinutes', 'createdAt', 'updatedAt'])
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && validExercise();
+      allow update: if request.auth != null
+        && resource.data.createdBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'description', 'durationMinutes', 'updatedAt'])
+        && request.resource.data.updatedAt == request.time
+        && validExercise();
+      // Las sesiones guardan una copia de sus ejercicios, así que eliminar no altera el historial.
+      allow delete: if request.auth != null && resource.data.createdBy == request.auth.uid;
+    }
+
+    // US-06: sesiones de entrenamiento del equipo.
+    match /trainingSessions/{sessionId} {
+      function validSession() {
+        let d = request.resource.data;
+        return d.teamId is string
+          && d.teamName is string
+          && d.category is string
+          && (d.category == 'TODAS'
+            || d.category in get(/databases/$(database)/documents/teams/$(d.teamId)).data.categories)
+          && d.date is timestamp
+          && d.date > request.time
+          && d.durationMinutes is int
+          && d.durationMinutes >= 1
+          && d.durationMinutes <= 600
+          && d.objectives is string
+          && d.objectives.size() > 0
+          && d.objectives.size() <= 500
+          && d.exercises is list
+          && d.exercises.size() <= 50;
+      }
+
+      // El entrenador que la creó y los jugadores del equipo pueden verla.
+      allow read: if request.auth != null && (
+        resource.data.createdBy == request.auth.uid
+        || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))
+      );
+      allow create: if isApprovedCoach()
+        && request.resource.data.keys().hasOnly([
+          'teamId', 'teamName', 'category', 'createdBy', 'date', 'durationMinutes',
+          'objectives', 'exercises', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.createdBy == request.auth.uid
+        && ownsTeam(request.resource.data.teamId)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && validSession();
+      // Solo se modifica o elimina antes de su realización.
+      allow update: if isApprovedCoach()
+        && resource.data.createdBy == request.auth.uid
+        && resource.data.date > request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'teamId', 'teamName', 'category', 'date', 'durationMinutes', 'objectives', 'exercises', 'updatedAt'
+        ])
+        && ownsTeam(request.resource.data.teamId)
+        && request.resource.data.updatedAt == request.time
+        && validSession();
+      allow delete: if request.auth != null
+        && resource.data.createdBy == request.auth.uid
+        && resource.data.date > request.time;
+    }
+
+    // US-08: asistencia; id "{sessionId}_{playerId}" para evitar duplicados.
+    match /attendance/{recordId} {
+      allow read: if request.auth != null && (
+        resource.data.coachId == request.auth.uid
+        || resource.data.playerId == request.auth.uid
+        || isVerifiedGuardianOf(resource.data.playerId)
+      );
+      allow create, update: if isApprovedCoach()
+        && request.resource.data.keys().hasOnly([
+          'sessionId', 'teamId', 'teamName', 'coachId', 'playerId', 'playerName', 'status', 'sessionDate', 'updatedAt'
+        ])
+        && request.resource.data.coachId == request.auth.uid
+        && (resource == null || resource.data.coachId == request.auth.uid)
+        && recordId == request.resource.data.sessionId + '_' + request.resource.data.playerId
+        && get(/databases/$(database)/documents/trainingSessions/$(request.resource.data.sessionId)).data.createdBy == request.auth.uid
+        && get(/databases/$(database)/documents/trainingSessions/$(request.resource.data.sessionId)).data.teamId == request.resource.data.teamId
+        && exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId))
+        && request.resource.data.status in ['PRESENTE', 'TARDANZA', 'AUSENTE', 'JUSTIFICADO']
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // US-05: mensualidades simuladas; id "{playerId}_{periodo}" para no duplicar periodos.
+    function feeAcademyOwner(academyId) {
+      return request.auth != null
+        && get(/databases/$(database)/documents/teams/$(academyId)).data.type == 'ACADEMIA'
+        && get(/databases/$(database)/documents/teams/$(academyId)).data.createdBy == request.auth.uid;
+    }
+    // Un documento por aviso y jugador permite comprobar la tutela por UID.
+    function academyCoachReadsNotices(academyId, teamId) {
+      let grant = get(/databases/$(database)/documents/academyResponsibilities/$(academyId + '_' + teamId)).data;
+      let team = get(/databases/$(database)/documents/teams/$(teamId)).data;
+      return grant.active == true && grant.coachId == request.auth.uid
+        && grant.permissions.hasAny(['READ_NOTICES'])
+        && team.createdBy == request.auth.uid && team.get('academyId', '') == academyId
+        && grant.linkId == team.get('academyInviteId', '');
+    }
+    match /academyResponsibilities/{responsibilityId} {
+      allow read: if request.auth != null && (feeAcademyOwner(resource.data.academyId) || resource.data.coachId == request.auth.uid);
+      function validResponsibility() {
+        let d = request.resource.data;
+        let team = get(/databases/$(database)/documents/teams/$(d.teamId)).data;
+        return d.keys().hasAll(['academyId','teamId','coachId','permissions','active','linkId','updatedAt','updatedBy'])
+          && d.keys().hasOnly(['academyId','teamId','coachId','permissions','active','linkId','updatedAt','updatedBy'])
+          && d.academyId is string && d.teamId is string && d.coachId is string && d.linkId is string
+          && responsibilityId == d.academyId + '_' + d.teamId
+          && feeAcademyOwner(d.academyId) && team.type == 'EQUIPO'
+          && team.createdBy == d.coachId && team.get('academyId', '') == d.academyId
+          && d.linkId == team.get('academyInviteId', '')
+          && d.active is bool && d.permissions is list && d.permissions.size() == 1
+          && d.permissions.hasOnly(['READ_NOTICES']) && d.updatedAt == request.time && d.updatedBy == request.auth.uid;
+      }
+      allow create, update: if request.auth != null && validResponsibility();
+      allow delete: if feeAcademyOwner(resource.data.academyId);
+    }
+
+    match /internalNotices/{noticeId} {
+      allow get: if request.auth != null && resource == null;
+      function currentTeam() {
+        return get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data;
+      }
+      function currentScope() {
+        return resource.data.scope == 'EQUIPO'
+          || (resource.data.scope == 'ACADEMIA'
+            && currentTeam().get('academyId', '') == resource.data.academyId);
+      }
+      allow read: if request.auth != null && (
+        resource.data.authorId == request.auth.uid
+        || (currentScope()
+          && ((resource.data.audience.hasAny(['ENTRENADOR']) && currentTeam().createdBy == request.auth.uid
+              && (resource.data.scope == 'EQUIPO' || academyCoachReadsNotices(resource.data.academyId, resource.data.teamId)))
+            || (exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + resource.data.playerId))
+              && ((resource.data.audience.hasAny(['JUGADOR']) && resource.data.playerId == request.auth.uid)
+                || (resource.data.audience.hasAny(['TUTOR']) && isVerifiedGuardianOf(resource.data.playerId)))))));
+      function validNotice() {
+        let d = request.resource.data;
+        let team = get(/databases/$(database)/documents/teams/$(d.teamId)).data;
+        return d.keys().hasAll(['teamId','playerId','authorId','scope','academyId','title','content','audience','createdAt'])
+          && d.keys().hasOnly(['teamId','playerId','authorId','scope','academyId','title','content','audience','createdAt'])
+          && d.teamId is string && d.playerId is string && d.academyId is string
+          && team.type == 'EQUIPO' && d.authorId == request.auth.uid
+          && ((d.scope == 'EQUIPO' && d.academyId == '' && team.createdBy == request.auth.uid)
+            || (d.scope == 'ACADEMIA' && team.get('academyId', '') == d.academyId && feeAcademyOwner(d.academyId)))
+          && exists(/databases/$(database)/documents/teamMemberships/$(d.teamId + '_' + d.playerId))
+          && d.title is string && d.title.size() > 0 && d.title.size() <= 100
+          && d.content is string && d.content.size() > 0 && d.content.size() <= 2000
+          && d.audience is list && d.audience.size() > 0 && d.audience.size() <= 3
+          && d.audience.hasOnly(['JUGADOR','TUTOR','ENTRENADOR'])
+          && d.createdAt == request.time;
+      }
+      allow create: if request.auth != null && validNotice();
+      allow update, delete: if false;
+    }
+
+    match /academyFees/{feeId} {
+      allow read: if request.auth != null && (resource.data.playerId == request.auth.uid
+        || isVerifiedGuardianOf(resource.data.playerId) || feeAcademyOwner(resource.data.academyId)
+        || resource.data.coachId == request.auth.uid);
+      function validFee() {
+        let d = request.resource.data;
+        return d.keys().hasAll(['academyId','playerId','teamId','coachId','period','status','createdAt','updatedAt','updatedBy','dueAt'])
+          && d.keys().hasOnly(['academyId','playerId','teamId','coachId','period','status','createdAt','updatedAt','updatedBy','dueAt'])
+          && d.academyId is string && d.playerId is string && d.teamId is string && d.coachId is string
+          && d.period is string && d.period.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')
+          && feeId == d.academyId + '_' + d.playerId + '_' + d.period
+          && d.status in ['PENDIENTE','PAGADA'] && d.dueAt is timestamp
+          && d.createdAt is timestamp && d.updatedAt == request.time && d.updatedBy == request.auth.uid;
+      }
+      allow create: if feeAcademyOwner(request.resource.data.academyId) && validFee()
+        && request.resource.data.createdAt == request.time
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.academyId == request.resource.data.academyId
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.createdBy == request.resource.data.coachId
+        && exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId))
+        && getAfter(/databases/$(database)/documents/academyFeeAmounts/$(feeId)).data.feeId == feeId;
+      allow update: if feeAcademyOwner(resource.data.academyId) && validFee()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt','updatedBy']);
+      allow delete: if false;
+    }
+    match /academyFeeAmounts/{feeId} {
+      allow read: if request.auth != null && (resource.data.playerId == request.auth.uid
+        || isVerifiedGuardianOf(resource.data.playerId) || feeAcademyOwner(resource.data.academyId));
+      function validAmount() {
+        let d = request.resource.data;
+        let fee = getAfter(/databases/$(database)/documents/academyFees/$(feeId)).data;
+        return d.keys().hasAll(['feeId','academyId','playerId','amountMinor','currency'])
+          && d.keys().hasOnly(['feeId','academyId','playerId','amountMinor','currency'])
+          && d.feeId == feeId && d.academyId == fee.academyId && d.playerId == fee.playerId
+          && d.amountMinor is int && d.amountMinor >= 0 && d.amountMinor <= 100000000
+          && d.currency is string && d.currency.matches('^[A-Z]{3}$');
+      }
+      allow create: if feeAcademyOwner(request.resource.data.academyId) && validAmount()
+        && !exists(/databases/$(database)/documents/academyFees/$(feeId));
+      allow update, delete: if false;
+    }
+
+    match /monthlyFees/{feeId} {
+      // resource == null permite comprobar si el periodo ya existe antes de registrarlo.
+      allow get: if request.auth != null && (
+        resource == null
+        || resource.data.coachId == request.auth.uid
+        || resource.data.playerId == request.auth.uid
+        || isVerifiedGuardianOf(resource.data.playerId)
+      );
+      allow list: if request.auth != null && (
+        resource.data.coachId == request.auth.uid
+        || resource.data.playerId == request.auth.uid
+        || isVerifiedGuardianOf(resource.data.playerId)
+      );
+      allow create: if isApprovedCoach()
+        && request.resource.data.keys().hasOnly([
+          'playerId', 'playerName', 'teamId', 'teamName', 'coachId', 'period', 'amount', 'status', 'paidAt', 'updatedAt'
+        ])
+        && request.resource.data.coachId == request.auth.uid
+        && ownsTeam(request.resource.data.teamId)
+        && exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId))
+        && request.resource.data.period is string
+        && request.resource.data.period.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')
+        && feeId == request.resource.data.playerId + '_' + request.resource.data.period
+        && request.resource.data.status in ['PENDIENTE', 'PAGADA']
+        && (!request.resource.data.keys().hasAny(['amount'])
+          || (request.resource.data.amount is number
+            && request.resource.data.amount >= 0
+            && request.resource.data.amount <= 100000))
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isApprovedCoach()
+        && resource.data.coachId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'paidAt', 'updatedAt'])
+        && request.resource.data.status in ['PENDIENTE', 'PAGADA']
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if request.auth != null && resource.data.coachId == request.auth.uid;
+    }
+  }
+}

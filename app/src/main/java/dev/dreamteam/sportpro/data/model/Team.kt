@@ -14,5 +14,6 @@ data class Team(
     val photoBase64: String = "",
     val activeJoinCodeId: String? = null,
     val photoUpdatedAt: Timestamp? = null,
-    val createdAt: Timestamp? = null
+    val createdAt: Timestamp? = null,
+    val archived: Boolean = false
 )

@@ -18,9 +18,20 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("boolean", "FIREBASE_SANDBOX", "false")
+        buildConfigField("String", "FIREBASE_EMULATOR_HOST", "\"10.0.2.2\"")
     }
 
     buildTypes {
+        create("sandbox") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".sandbox"
+            matchingFallbacks += "debug"
+            buildConfigField("boolean", "FIREBASE_SANDBOX", "true")
+            val host = providers.gradleProperty("sportproEmulatorHost").orElse("10.0.2.2").get()
+            require(host.matches(Regex("[a-zA-Z0-9.-]+"))) { "sportproEmulatorHost must be a hostname or IPv4 address" }
+            buildConfigField("String", "FIREBASE_EMULATOR_HOST", "\"$host\"")
+        }
         release {
             optimization {
                 enable = false
@@ -36,6 +47,9 @@ android {
         buildConfig = true
     }
 }
+
+// The sandbox initializes a synthetic Firebase project in SportProApplication.
+tasks.matching { it.name == "processSandboxGoogleServices" }.configureEach { enabled = false }
 
 dependencies {
     implementation(platform(libs.androidx.compose.bom))

@@ -39,6 +39,7 @@ class SessionDetailViewModel : ViewModel() {
     private var sessionListener: ListenerRegistration? = null
     private var rosterListener: ListenerRegistration? = null
     private var attendanceListener: ListenerRegistration? = null
+    private var rosterTeamId: String? = null
     private var fullRoster: List<TeamMember> = emptyList()
     private var started = false
 
@@ -61,15 +62,23 @@ class SessionDetailViewModel : ViewModel() {
     }
 
     private fun watchAttendance(session: TrainingSession) {
-        if (rosterListener == null) {
-            _uiState.update { it.copy(rosterLoading = true) }
+        if (rosterTeamId != session.teamId) {
+            rosterListener?.remove()
+            rosterTeamId = session.teamId
+            fullRoster = emptyList()
+            _uiState.update { it.copy(roster = emptyList(), rosterLoading = true, error = null) }
             rosterListener = teamRepository.listenRoster(
                 teamId = session.teamId,
                 onChange = { members ->
+                    if (rosterTeamId != session.teamId) return@listenRoster
                     fullRoster = members
                     publishRoster()
                 },
-                onError = { message -> _uiState.update { it.copy(rosterLoading = false, error = message) } }
+                onError = { message ->
+                    if (rosterTeamId == session.teamId) {
+                        _uiState.update { it.copy(rosterLoading = false, error = message) }
+                    }
+                }
             )
         } else {
             publishRoster()
@@ -93,7 +102,8 @@ class SessionDetailViewModel : ViewModel() {
 
     fun mark(member: TeamMember, status: AttendanceStatus) {
         val session = _uiState.value.session ?: return
-        if (member.userId in _uiState.value.savingPlayerIds) return
+        if (!_uiState.value.isOwner || member !in _uiState.value.roster ||
+            member.userId in _uiState.value.savingPlayerIds) return
         _uiState.update { it.copy(savingPlayerIds = it.savingPlayerIds + member.userId) }
         attendanceRepository.mark(
             session = session,

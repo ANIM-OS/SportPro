@@ -32,7 +32,7 @@ La pestaña Equipos solo muestra equipos creados por la cuenta o equipos a los q
 
 El entrenador puede crear una academia y vincular equipos que administra a esa academia. La ficha de la academia lista los equipos asociados; cada equipo conserva su ficha y gestión propia. No se puede eliminar una academia mientras tenga equipos vinculados. El propietario puede editar el nombre, la ciudad, la descripción, los colores y el año de fundación, subir una foto de perfil y eliminar el equipo. Al eliminarlo, la app borra primero sus invitaciones y membresías. Las fotos nuevas se reducen y se guardan junto al equipo en Firestore; los logos que ya estaban en Firebase Storage siguen siendo visibles.
 
-Cada equipo tiene una vista de Plantilla y Alineación por categoría. El entrenador puede editar nombre, categoría y dorsal de cada integrante, retirar jugadores y guardar una formación 4-3-3, 4-4-2 o 3-5-2 con asignaciones por posición. Al crear el equipo se genera un QR de registro de un solo uso y 15 minutos de validez; la ficha lo renueva al usarse o vencer. Solo el código activo del equipo permite unirse. Un jugador con correo verificado y rol JUGADOR puede escanearlo desde Equipos, confirmar su nombre y categoría y unirse; el equipo sigue siendo privado. Los QR, las membresías y las alineaciones se borran cuando el propietario elimina el equipo.
+Cada equipo tiene una plantilla por categoría. El entrenador puede editar el nombre, la categoría y el dorsal de sus integrantes. Al escanear el QR, el jugador solicita el ingreso y el entrenador decide si lo aprueba. La alineación vive en cada partido.
 
 ## Autenticación
 
@@ -103,18 +103,15 @@ Actualmente el proyecto no se encuentra abierto a contribuciones externas.
 
 Convocatorias, disponibilidad y alineaciones por partido se abren desde
 **Equipos → Convocatorias por partido** en la app SportPro habitual.
-En Android Studio selecciona la variante **debug** y ejecuta la app. No existe
-una variante ni una aplicación separada «SportPro Local».
-La app usa la configuración existente de `app/google-services.json` y las cuentas,
-equipos y jugadores del Firebase compartido; no se copian datos de los emuladores.
+La variante **debug** usa la configuración del Firebase compartido. Para validar cambios
+de permisos o datos, usa primero **sandbox** con Firebase Emulator.
 
 El entrenador selecciona equipo y partido, marca jugadores de la categoría y guarda.
 Puede registrar el partido y ajustar la fecha límite sugerida para las respuestas.
 El jugador o tutor autorizado confirma su disponibilidad antes de ese límite.
 
-Las reglas de US-09, US-10 y US-11 se comprobaron y esta versión de
-`firestore.rules` se publicó en `sportpro-6f6ad` el 21 de noviembre de 2026.
-Antes de cambiarlas de nuevo, compara la versión publicada con el repositorio.
+`firestore.rules` combina las reglas de partidos con los permisos locales de US-22.
+La configuración de los emuladores apunta a ese archivo.
 La pestaña **Partidos** y
 **Equipos → Convocatorias por partido** leen los mismos documentos `matchFixtures`.
 El marcador y los eventos todavía no tienen persistencia; la app no muestra
@@ -156,10 +153,9 @@ su lugar. Una posición ocupada debe liberarse antes de colocar otro jugador.
 La disponibilidad aparece junto a los nombres. Las alineaciones incompletas se pueden
 preparar y guardar; no se exige tener once titulares desde el primer guardado.
 
-La cancha y las formaciones se comparten con la alineación general del equipo. Cambiar
-la formación de un partido conserva las casillas asignadas y pide confirmar que se
-adaptarán sus posiciones; no modifica la alineación general ni otro encuentro.
-Los jugadores del equipo pueden consultar la alineación desde su convocatoria.
+Cambiar la formación conserva las casillas asignadas y pide confirmar la adaptación de
+sus posiciones. Cada partido tiene su propia alineación. Los jugadores convocados
+pueden consultarla desde **Partidos** o desde su convocatoria.
 Solo el propietario aprobado puede editarla, y solamente antes del inicio del partido.
 
 La colección nueva es `matchLineups`, con un documento por partido y subcolecciones
@@ -172,15 +168,18 @@ que su asignación ya no es válida y permite retirarla; no altera ese otro mód
 
 ## Pruebas aisladas de Firebase
 
-Los emuladores se conservan únicamente para las pruebas automatizadas de reglas;
-no son una variante de la aplicación ni se necesitan para abrir SportPro.
+1. Inicia Authentication y Firestore con `scripts/start-callups-local.command`.
+2. Ejecuta `node tests/callups/lineup-check.mjs` para probar partidos, disponibilidad y alineación.
+3. Selecciona **sandbox** en Android Studio o ejecuta `./gradlew :app:installSandbox`.
+4. Abre **SportPro Pruebas**. Esta variante tiene un identificador propio, usa exclusivamente
+   `demo-sportpro` y conecta Authentication por el puerto 9099 y Firestore por el 8080.
+   Dos emuladores Android en la misma máquina pueden usar las mismas cuentas de prueba.
+   El host predeterminado es `10.0.2.2`. Usa `-PsportproEmulatorHost=<host>` para un host de pruebas accesible.
+5. La suite de QR, contactos, avisos y mensualidades ejecuta `node firestore-qr.test.cjs`
+   con `firebase.emulator.json`. Esa configuración usa el puerto 8188.
 
-1. Ejecuta `scripts/start-callups-local.command` y mantén la ventana abierta.
-2. Ejecuta `scripts/prepare-callups-local.command` para correr la suite.
-
-`tests/callups/lineup-check.mjs` encadena las comprobaciones de US-09, US-10 y US-11,
-incluidas autorizaciones, persistencia, fechas límite, alineaciones independientes,
-escrituras simultáneas y conservación de la alineación general.
-Solo utiliza `demo-sportpro` en localhost; sus cuentas y datos ficticios no funcionan
-en SportPro ni se migran al Firebase compartido. La interfaz de los datos de prueba
-está en http://127.0.0.1:4000/firestore. No ejecutar `firebase deploy` para estas pruebas.
+Antes de una publicación, registra la revisión de Git y el archivo de reglas exacto, valida los
+permisos por rol y guarda una copia de las reglas activas. Para US-22 revisa los vínculos por correo,
+las invitaciones sin categoría y los datos de contacto antiguos. Tras publicar, lee las reglas
+activas y comprueba el flujo desde una cuenta de cada rol. `firestore.qr-release.rules` corresponde
+a la entrega de QR anterior. El archivo de desarrollo y pruebas actual es `firestore.rules`.

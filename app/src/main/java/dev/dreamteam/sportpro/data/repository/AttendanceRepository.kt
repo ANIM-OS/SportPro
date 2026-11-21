@@ -45,7 +45,7 @@ class AttendanceRepository {
         }
         var query: Query = attendance.whereEqualTo("playerId", playerId)
         if (asCoach) query = query.whereEqualTo("coachId", uid)
-        return listen(query, onChange, onError)
+        return listen(query, onChange, onError, requireServer = uid != playerId && !asCoach)
     }
 
     /** Marca o corrige la asistencia; el id fijo evita duplicados del mismo jugador en la sesión. */
@@ -79,12 +79,14 @@ class AttendanceRepository {
     private fun listen(
         query: Query,
         onChange: (List<AttendanceRecord>) -> Unit,
-        onError: (String) -> Unit
-    ): ListenerRegistration = query.addSnapshotListener { snapshot, error ->
+        onError: (String) -> Unit,
+        requireServer: Boolean = false
+    ): ListenerRegistration = query.addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE) { snapshot, error ->
         if (error != null) {
             onError(error.userMessage("No se pudo cargar la asistencia"))
             return@addSnapshotListener
         }
+        if (requireServer && snapshot?.metadata?.isFromCache != false) return@addSnapshotListener
         onChange(
             snapshot?.documents?.mapNotNull(::fromDocument)
                 ?.sortedByDescending { it.sessionDate?.seconds ?: 0L }.orEmpty()
