@@ -111,9 +111,23 @@ equipos y jugadores del Firebase compartido; no se copian datos de los emuladore
 El entrenador selecciona equipo y partido, marca jugadores de la categoría y guarda.
 Puede registrar el partido y ajustar la fecha límite sugerida para las respuestas.
 El jugador o tutor autorizado confirma su disponibilidad antes de ese límite.
+Para llegar a la plantilla con QR, el jugador envía una solicitud en
+`teamJoinRequests`; el entrenador la aprueba y la membresía se crea en la misma
+operación. El QR puede recibir varias solicitudes hasta vencer. Los jugadores
+pueden cancelar solicitudes pendientes y el dueño limpia las solicitudes al
+eliminar su equipo.
+Para autorizar a un tutor, el jugador genera un código de 30 minutos en su perfil,
+el tutor lo acepta en **Equipos → Convocatorias por partido** y el jugador confirma
+la solicitud. El vínculo activo se guarda en `guardianLinks` y se puede revocar.
+Los vínculos antiguos de `playerGuardians` siguen visibles para que sus usuarios
+sepan que deben repetir la confirmación; ya no conceden acceso a los datos del jugador.
 
-Las reglas de US-09, US-10 y US-11 se comprobaron y esta versión de
-`firestore.rules` se publicó en `sportpro-6f6ad` el 21 de noviembre de 2026.
+Las reglas de US-09, US-10 y US-11 se comprobaron. El 21 de noviembre de 2026
+se sincronizó `firestore.rules` con las reglas publicadas por el equipo en
+`sportpro-6f6ad` y se publicó el permiso para cancelar y limpiar solicitudes de
+ingreso; después se verificó que el archivo coincide con producción. Incluye el
+flujo actual de `guardianInvites` y `guardianLinks` y conserva los cambios de
+reglas hechos por otros integrantes.
 Antes de cambiarlas de nuevo, compara la versión publicada con el repositorio.
 La pestaña **Partidos** y
 **Equipos → Convocatorias por partido** leen los mismos documentos `matchFixtures`.
@@ -153,7 +167,8 @@ Toca una casilla para elegir un titular; usa **Agregar suplente** para el banco.
 jugador tiene una sola asignación y se puede mover entre titular y suplente mediante
 **Editar**. **Guardar asignación** persiste el cambio inmediatamente; **Retirar** libera
 su lugar. Una posición ocupada debe liberarse antes de colocar otro jugador.
-La disponibilidad aparece junto a los nombres. Las alineaciones incompletas se pueden
+La disponibilidad aparece junto a los nombres, incluso cuando el partido ya
+comenzó. Las alineaciones incompletas se pueden
 preparar y guardar; no se exige tener once titulares desde el primer guardado.
 
 La cancha y las formaciones se comparten con la alineación general del equipo. Cambiar
@@ -179,7 +194,8 @@ no son una variante de la aplicación ni se necesitan para abrir SportPro.
 2. Ejecuta `scripts/prepare-callups-local.command` para correr la suite.
 
 `tests/callups/lineup-check.mjs` encadena las comprobaciones de US-09, US-10 y US-11,
-incluidas autorizaciones, persistencia, fechas límite, alineaciones independientes,
+incluido el recorrido QR → membresía → convocatoria → respuesta con reglas reales
+en el emulador local. También cubre autorizaciones, persistencia, fechas límite, alineaciones independientes,
 escrituras simultáneas y conservación de la alineación general.
 Solo utiliza `demo-sportpro` en localhost; sus cuentas y datos ficticios no funcionan
 en SportPro ni se migran al Firebase compartido. La interfaz de los datos de prueba

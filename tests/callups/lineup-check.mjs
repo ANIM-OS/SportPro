@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import './availability-check.mjs';
+import './team-join-check.mjs';
 import {root,request,set,fields,account,coach,player,other,wrongCategory,fixture,selection,expect} from './emulator-check.mjs';
 const prefix='projects/demo-sportpro/databases/(default)/documents/';
 const update=(path,data)=>({update:{name:prefix+path,fields:fields(data)},updateTransforms:[{fieldPath:'updatedAt',setToServerValue:'REQUEST_TIME'}]});

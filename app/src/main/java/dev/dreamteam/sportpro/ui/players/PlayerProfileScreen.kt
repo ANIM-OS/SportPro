@@ -3,6 +3,8 @@ package dev.dreamteam.sportpro.ui.players
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -16,7 +18,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.dreamteam.sportpro.data.model.PlayerProfile
+import dev.dreamteam.sportpro.data.model.GuardianInvite
+import dev.dreamteam.sportpro.data.model.GuardianLink
 import dev.dreamteam.sportpro.ui.training.DetailLine
 import dev.dreamteam.sportpro.ui.training.InfoCard
 import dev.dreamteam.sportpro.ui.training.LoadingBox
@@ -166,9 +169,14 @@ fun PlayerProfileScreen(
                 )
                 if (isSelf) {
                     GuardiansSection(
-                        guardians = uiState.guardians.map { it.guardianEmail },
-                        onAdd = { email, done -> viewModel.addGuardian(email, form.fullName.ifBlank { displayName }, done) },
-                        onRemove = { email -> uiState.guardians.firstOrNull { it.guardianEmail == email }?.let(viewModel::removeGuardian) }
+                        guardians = uiState.guardians,
+                        invites = uiState.guardianInvites,
+                        legacyEmails = uiState.legacyGuardianEmails,
+                        busy = uiState.guardianBusy,
+                        onCreate = { viewModel.createGuardianInvite(form.fullName.ifBlank { displayName }) },
+                        onConfirm = viewModel::confirmGuardianInvite,
+                        onCancel = viewModel::cancelGuardianInvite,
+                        onRemove = viewModel::removeGuardian
                     )
                 }
             } else {
@@ -342,36 +350,56 @@ private fun ReadOnlyProfile(profile: PlayerProfile?) {
 
 @Composable
 private fun GuardiansSection(
-    guardians: List<String>,
-    onAdd: (email: String, done: () -> Unit) -> Unit,
-    onRemove: (String) -> Unit
+    guardians: List<GuardianLink>,
+    invites: List<GuardianInvite>,
+    legacyEmails: List<String>,
+    busy: Boolean,
+    onCreate: () -> Unit,
+    onConfirm: (GuardianInvite) -> Unit,
+    onCancel: (GuardianInvite) -> Unit,
+    onRemove: (GuardianLink) -> Unit
 ) {
-    var email by rememberSaveable { mutableStateOf("") }
+    val context = LocalContext.current
     SectionLabel("PADRES O TUTORES", modifier = Modifier.padding(top = 8.dp))
     Text(
-        text = "Los correos vinculados pueden consultar el perfil, la asistencia y las mensualidades del jugador.",
+        text = "Genera un código, compártelo con tu tutor y confirma aquí su solicitud. Solo los tutores confirmados pueden ver tus convocatorias y responder.",
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 12.sp
     )
-    guardians.forEach { guardianEmail ->
+    guardians.forEach { guardian ->
         InfoCard {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(guardianEmail, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                IconButton(onClick = { onRemove(guardianEmail) }) {
-                    Icon(Icons.Default.Close, contentDescription = "Quitar", tint = MaterialTheme.colorScheme.error)
+                Text(guardian.guardianName.ifBlank { "Tutor confirmado" }, color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 14.sp, modifier = Modifier.weight(1f))
+                IconButton(onClick = { onRemove(guardian) }, enabled = !busy) {
+                    Icon(Icons.Default.Close, contentDescription = "Revocar tutor", tint = MaterialTheme.colorScheme.error)
                 }
             }
         }
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        SportTextField(
-            value = email,
-            onValueChange = { email = it },
-            label = "Correo del padre o tutor",
-            keyboardType = KeyboardType.Email,
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        TextButton(onClick = { onAdd(email) { email = "" } }) { Text("Vincular") }
+    invites.forEach { invite ->
+        val expired = (invite.expiresAt?.toDate()?.time ?: 0L) <= System.currentTimeMillis()
+        val expiryLabel = invite.expiresAt?.toDate()?.let { java.text.DateFormat.getDateTimeInstance().format(it) }.orEmpty()
+        InfoCard {
+            Text(if (invite.status == "CLAIMED") "Solicitud de ${invite.guardianName}" else "Código para tu tutor: ${invite.id}")
+            if (invite.status == "CLAIMED") Text("Confirma solo si compartiste este código con esa persona.", fontSize = 12.sp)
+            Text(if (expired) "Código vencido" else "Vence: $expiryLabel",
+                fontSize = 12.sp)
+            Row {
+                if (invite.status == "OPEN" && !expired) {
+                    TextButton(onClick = {
+                        context.getSystemService(ClipboardManager::class.java)
+                            ?.setPrimaryClip(ClipData.newPlainText("Código SportPro", invite.id))
+                    }) { Text("Copiar código") }
+                }
+                if (invite.status == "CLAIMED" && !expired) {
+                    TextButton(onClick = { onConfirm(invite) }, enabled = !busy) { Text("Confirmar tutor") }
+                }
+                TextButton(onClick = { onCancel(invite) }, enabled = !busy) { Text("Cancelar") }
+            }
+        }
     }
+    if (legacyEmails.isNotEmpty()) Text("Vínculos anteriores por correo: ${legacyEmails.joinToString()}. Solo los tutores confirmados arriba tienen acceso; si falta alguno, comparte un código nuevo.",
+        color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+    Button(onClick = onCreate, enabled = !busy) { Text(if (busy) "Procesando…" else "Generar código para tutor") }
 }

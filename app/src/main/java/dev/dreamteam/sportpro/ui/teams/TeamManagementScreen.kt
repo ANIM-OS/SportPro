@@ -223,7 +223,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
                             val code = state.joinCode!!
                             QrImage("sportpro://join/${code.id}")
                             Text("${code.teamName} · ${code.categories.joinToString(" · ")}", textAlign = TextAlign.Center)
-                            Text("Código QR estático del equipo.",
+                            Text("QR válido hasta su vencimiento; los jugadores solicitan ingreso y tú decides si aprobarlo.",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                         }
                         state.managementBusy -> CircularProgressIndicator()
@@ -248,8 +248,26 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
             }
         }
         state.managementError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        state.managementMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         if (state.membersLoading) CircularProgressIndicator()
         if (tab == 0) {
+            if (owner && state.joinRequests.isNotEmpty()) {
+                Text("Solicitudes de ingreso", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                state.joinRequests.forEach { request ->
+                    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text("${request.playerName} · ${request.category}")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(enabled = !state.managementBusy,
+                                    onClick = { viewModel.resolveJoinRequest(team, request, true) }) { Text("Aprobar") }
+                                TextButton(enabled = !state.managementBusy,
+                                    onClick = { viewModel.resolveJoinRequest(team, request, false) }) { Text("Rechazar") }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
             if (approvedOwner) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onEmailInvite) { Text("Invitar por correo") }

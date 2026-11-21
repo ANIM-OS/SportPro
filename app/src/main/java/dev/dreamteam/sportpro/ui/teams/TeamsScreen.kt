@@ -87,10 +87,10 @@ fun TeamsScreen(
         var playerName by remember(code.id) { mutableStateOf("") }
         var category by remember(code.id) { mutableStateOf(code.categories.firstOrNull().orEmpty()) }
         AlertDialog(onDismissRequest = { if (!uiState.managementBusy) viewModel.clearPendingJoinCode() },
-            title = { Text("Unirse a ${code.teamName}") },
+            title = { Text("Solicitar ingreso a ${code.teamName}") },
             text = {
                 Column {
-                    Text("El QR se usa una sola vez. Confirma tus datos para registrarte.")
+                    Text("Envía tus datos al entrenador. Podrás recibir convocatorias cuando apruebe tu ingreso.")
                     OutlinedTextField(playerName, { playerName = it.take(80) }, label = { Text("Tu nombre") }, singleLine = true)
                     code.categories.forEach { item ->
                         FilterChip(selected = category == item, onClick = { category = item }, label = { Text(item) })
@@ -100,7 +100,7 @@ fun TeamsScreen(
             },
             confirmButton = {
                 TextButton(enabled = !uiState.managementBusy && playerName.isNotBlank() && category.isNotBlank(),
-                    onClick = { viewModel.joinWithCode(code, playerName, category) }) { Text("Registrarme") }
+                    onClick = { viewModel.joinWithCode(code, playerName, category) }) { Text("Enviar solicitud") }
             },
             dismissButton = { TextButton(onClick = viewModel::clearPendingJoinCode, enabled = !uiState.managementBusy) { Text("Cancelar") } })
     }
@@ -131,7 +131,7 @@ fun TeamsScreen(
             title = { Text("Eliminar ${team.name}") },
             text = {
                 Column {
-                    Text("Se eliminarán el equipo, su foto, invitaciones y membresías. Esta acción no se puede deshacer.")
+                    Text("Se eliminarán el equipo, su foto, solicitudes, membresías, partidos, convocatorias y respuestas. Esta acción no se puede deshacer.")
                     uiState.teamActionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
             },
@@ -282,6 +282,7 @@ fun TeamsScreen(
 
         uiState.invitesError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         uiState.managementError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        uiState.managementMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         if (editingTeam == null) uiState.teamActionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (inviteTeam == null) {
             uiState.inviteActionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -313,6 +314,20 @@ fun TeamsScreen(
                     .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                val pendingRequests = uiState.myJoinRequests.filter { request ->
+                    request.status == "PENDING" && uiState.teams.none { team -> team.id == request.teamId } }
+                if (pendingRequests.isNotEmpty()) {
+                    item { Text("SOLICITUDES DE INGRESO", fontWeight = FontWeight.Bold) }
+                    items(pendingRequests, key = { "join_${it.id}" }) { request ->
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text("${request.teamName.ifBlank { "Equipo" }} · ${request.category}: esperando aprobación del entrenador.")
+                                TextButton(enabled = !uiState.managementBusy,
+                                    onClick = { viewModel.cancelJoinRequest(request) }) { Text("Cancelar solicitud") }
+                            }
+                        }
+                    }
+                }
                 if (!canCreateTeam && uiState.pendingInvites.isNotEmpty()) {
                     item { Text("INVITACIONES PENDIENTES", fontWeight = FontWeight.Bold) }
                     items(uiState.pendingInvites, key = { "invite_${it.id}" }) { invite ->

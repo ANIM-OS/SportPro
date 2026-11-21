@@ -104,11 +104,11 @@ fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, onBack: () -> 
         }
         starters.forEach { row ->
             val label = slots.getOrNull(row.position.removePrefix("P").toIntOrNull() ?: -1)?.third ?: row.position
-            EntryRow(row, label, roster, responses, editable, { editing = row }) { perform(repository.remove(encounter.id, row.playerId), "Jugador retirado de esta alineación") }
+            EntryRow(row, label, roster, responses, canManage, editable, { editing = row }) { perform(repository.remove(encounter.id, row.playerId), "Jugador retirado de esta alineación") }
         }
         Text("Suplentes (${reserves.size})", style = MaterialTheme.typography.titleMedium)
         reserves.forEach { row ->
-            EntryRow(row, benchPositions.find { it.first == row.position }?.second ?: row.position, roster, responses, editable, { editing = row }) {
+            EntryRow(row, benchPositions.find { it.first == row.position }?.second ?: row.position, roster, responses, canManage, editable, { editing = row }) {
                 perform(repository.remove(encounter.id, row.playerId), "Jugador retirado de esta alineación")
             }
         }
@@ -124,12 +124,13 @@ fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, onBack: () -> 
 }
 
 @Composable
-private fun EntryRow(entry: MatchLineupEntry, position: String, roster: List<TeamMember>, responses: List<AvailabilityResponse>, editable: Boolean, edit: () -> Unit, remove: () -> Unit) {
+private fun EntryRow(entry: MatchLineupEntry, position: String, roster: List<TeamMember>, responses: List<AvailabilityResponse>,
+    showAvailability: Boolean, editable: Boolean, edit: () -> Unit, remove: () -> Unit) {
     val player = roster.find { it.userId == entry.playerId }
     Column {
         Text("${player?.playerName ?: "Jugador fuera de plantilla"} · $position")
+        if (showAvailability) Text(responseLabel(responses.find { it.playerId == entry.playerId }?.status))
         if (editable) {
-            Text(responseLabel(responses.find { it.playerId == entry.playerId }?.status))
             Row {
                 TextButton(onClick = edit) { Text("Editar") }
                 TextButton(onClick = remove) { Text("Retirar") }

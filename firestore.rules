@@ -252,8 +252,14 @@ service cloud.firestore {
     // =========================
     match /communityPosts/{postId} {
 
-      // Se conserva la lectura de la versión anterior de la app durante la transición.
-      allow read: if request.auth != null;
+      allow read: if request.auth != null && (
+        resource.data.visibility == 'TODOS'
+        || resource.data.authorId == request.auth.uid
+        || (resource.data.visibility in ['EQUIPO', 'ACADEMIA']
+          && resource.data.teamId is string
+          && (get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
+            || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))))
+      );
 
       // Crear publicaciones
       allow create: if request.auth != null
@@ -549,15 +555,25 @@ service cloud.firestore {
             && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.status == 'ACCEPTED'
             && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.teamId == request.resource.data.teamId
             && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.invitedEmail == request.auth.token.email)
-          || (request.resource.data.keys().hasAny(['joinCodeId'])
-            && !request.resource.data.keys().hasAny(['inviteId'])
-            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['JUGADOR'])
-            && request.resource.data.joinCodeId is string
-            && get(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.joinCodeId)).data.teamId == request.resource.data.teamId
-            && get(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.joinCodeId)).data.expiresAt > request.time
-            && !get(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.joinCodeId)).data.keys().hasAny(['usedBy'])
-            && getAfter(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.joinCodeId)).data.usedBy == request.auth.uid)
+
         );
+
+      // La aprobación y la membresía se escriben juntas.
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(['teamId','userId','requestId','playerName','category','acceptedAt'])
+        && request.resource.data.keys().hasOnly(['teamId','userId','requestId','playerName','category','acceptedAt'])
+        && request.resource.data.teamId is string && request.resource.data.userId is string
+        && request.resource.data.requestId is string
+        && membershipId == request.resource.data.teamId + '_' + request.resource.data.userId
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.createdBy == request.auth.uid
+        && get(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.status == 'PENDING'
+        && getAfter(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.status == 'APPROVED'
+        && getAfter(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.teamId == request.resource.data.teamId
+        && getAfter(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.playerId == request.resource.data.userId
+        && getAfter(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.playerName == request.resource.data.playerName
+        && getAfter(/databases/$(database)/documents/teamJoinRequests/$(request.resource.data.requestId)).data.category == request.resource.data.category
+        && request.resource.data.category in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.categories
+        && request.resource.data.acceptedAt == request.time;
 
       allow update: if request.auth != null
         && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
@@ -572,6 +588,47 @@ service cloud.firestore {
             && request.resource.data.jerseyNumber <= 99));
       allow delete: if request.auth != null
         && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid;
+    }
+
+    match /teamJoinRequests/{requestId} {
+      allow read: if request.auth != null && (
+        resource.data.playerId == request.auth.uid
+        || get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid);
+      function validNewRequest() {
+        return request.auth != null && request.auth.token.email_verified == true
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['JUGADOR'])
+        && request.resource.data.keys().hasAll(['teamId','playerId','codeId','playerName','category','status','createdAt'])
+        && request.resource.data.keys().hasOnly(['teamId','teamName','playerId','codeId','playerName','category','status','createdAt'])
+        && request.resource.data.teamId is string && request.resource.data.codeId is string
+        && request.resource.data.playerId == request.auth.uid
+        && requestId == request.resource.data.teamId + '_' + request.auth.uid
+        && request.resource.data.playerName is string && request.resource.data.playerName.size() > 0
+        && request.resource.data.playerName.size() <= 80
+        && request.resource.data.category is string
+        && request.resource.data.category in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.categories
+        && (!request.resource.data.keys().hasAny(['teamName']) ||
+          request.resource.data.teamName == get(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.codeId)).data.teamName)
+        && get(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.codeId)).data.teamId == request.resource.data.teamId
+        && get(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.codeId)).data.expiresAt > request.time
+        && !get(/databases/$(database)/documents/teamJoinCodes/$(request.resource.data.codeId)).data.keys().hasAny(['usedBy'])
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.type == 'EQUIPO'
+        && !exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.auth.uid))
+        && request.resource.data.status == 'PENDING' && request.resource.data.createdAt == request.time;
+      }
+      allow create: if validNewRequest();
+      allow update: if resource.data.status in ['DECLINED', 'APPROVED']
+        && resource.data.playerId == request.auth.uid && validNewRequest();
+      allow update: if request.auth != null && resource.data.status == 'PENDING'
+        && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','resolvedAt'])
+        && request.resource.data.status in ['APPROVED','DECLINED']
+        && request.resource.data.resolvedAt == request.time
+        && (request.resource.data.status == 'DECLINED' ||
+          (getAfter(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + resource.data.playerId)).data.requestId == requestId
+           && getAfter(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + resource.data.playerId)).data.userId == resource.data.playerId));
+      allow delete: if request.auth != null && (
+        get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
+        || (resource.data.playerId == request.auth.uid && resource.data.status == 'PENDING'));
     }
 
     match /teamJoinCodes/{codeId} {
@@ -595,15 +652,7 @@ service cloud.firestore {
         && request.resource.data.expiresAt is timestamp
         && request.resource.data.expiresAt > request.time
         && request.resource.data.expiresAt < request.time + duration.value(1, 'h');
-      allow update: if request.auth != null
-        && request.auth.token.email_verified == true
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['JUGADOR'])
-        && resource.data.expiresAt > request.time
-        && !resource.data.keys().hasAny(['usedBy'])
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedBy', 'usedAt'])
-        && request.resource.data.usedBy == request.auth.uid
-        && request.resource.data.usedAt == request.time
-        && getAfter(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid)).data.joinCodeId == codeId;
+      allow update: if false;
       allow delete: if request.auth != null
         && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid;
     }
@@ -639,12 +688,8 @@ service cloud.firestore {
     // =========================
     match /playerProfiles/{playerId} {
 
-      allow read: if request.auth != null && (
-        request.auth.uid == playerId
-        || isApprovedCoach()
-        // US-04: el padre o tutor vinculado y verificado puede consultar el perfil.
-        || isVerifiedGuardianOf(playerId)
-      );
+      // La ficha existente mezcla campos privados: se reserva al titular.
+      allow read: if request.auth != null && request.auth.uid == playerId;
 
       // US-04: miniatura de la foto guardada en el documento (plan Spark, sin Cloud Storage).
       function validPlayerPhoto() {
@@ -676,9 +721,80 @@ service cloud.firestore {
 
     // Padre o tutor con correo verificado y vinculado por el propio jugador.
     function isVerifiedGuardianOf(playerId) {
-      return request.auth != null
-        && request.auth.token.email_verified == true
-        && exists(/databases/$(database)/documents/playerGuardians/$(playerId + '_' + request.auth.token.email.lower()));
+      return request.auth != null && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/guardianLinks/$(playerId + '_' + request.auth.uid))
+        && get(/databases/$(database)/documents/guardianLinks/$(playerId + '_' + request.auth.uid)).data.status == 'ACTIVE';
+    }
+
+    function guardianAccountLabel() {
+      let name = request.auth.token.get('name', '');
+      return name is string && name.size() > 0 && name.size() <= 80 ? name : request.auth.token.email;
+    }
+
+    match /guardianInvites/{inviteId} {
+      allow get: if request.auth != null && request.auth.token.email_verified == true
+        && (resource.data.playerId == request.auth.uid
+          || resource.data.get('guardianId', '') == request.auth.uid
+          || (resource.data.status == 'OPEN' && resource.data.expiresAt > request.time
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['PADRE / TUTOR'])));
+      allow list: if request.auth != null
+        && (resource.data.playerId == request.auth.uid || resource.data.get('guardianId', '') == request.auth.uid);
+      allow create: if request.auth != null && request.auth.token.email_verified == true
+        && request.resource.data.keys().hasAll(['playerId','playerName','status','createdAt','expiresAt'])
+        && request.resource.data.keys().hasOnly(['playerId','playerName','status','createdAt','expiresAt'])
+        && request.resource.data.playerId == request.auth.uid
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['JUGADOR'])
+        && request.resource.data.playerName is string && request.resource.data.playerName.size() > 0
+        && request.resource.data.playerName.size() <= 80 && request.resource.data.status == 'OPEN'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.expiresAt is timestamp && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt < request.time + duration.value(1, 'h');
+      // El primer tutor que acepta queda ligado a la invitación; el jugador debe confirmar.
+      allow update: if request.auth != null && request.auth.token.email_verified == true
+        && resource.data.status == 'OPEN' && resource.data.expiresAt > request.time
+        && request.auth.uid != resource.data.playerId
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['PADRE / TUTOR'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','guardianId','guardianName','claimedAt'])
+        && request.resource.data.status == 'CLAIMED' && request.resource.data.guardianId == request.auth.uid
+        && request.resource.data.guardianName is string && request.resource.data.guardianName.size() > 0
+        && request.resource.data.guardianName.size() <= 254
+        && request.resource.data.guardianName == guardianAccountLabel()
+        && request.resource.data.claimedAt == request.time;
+      allow update: if request.auth != null && resource.data.status == 'CLAIMED'
+        && resource.data.playerId == request.auth.uid && resource.data.expiresAt > request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','resolvedAt'])
+        && request.resource.data.status == 'ACTIVE' && request.resource.data.resolvedAt == request.time
+        && getAfter(/databases/$(database)/documents/guardianLinks/$(resource.data.playerId + '_' + resource.data.guardianId)).data.inviteId == inviteId
+        && getAfter(/databases/$(database)/documents/guardianLinks/$(resource.data.playerId + '_' + resource.data.guardianId)).data.status == 'ACTIVE';
+      allow update: if request.auth != null && resource.data.status in ['OPEN','CLAIMED']
+        && (resource.data.playerId == request.auth.uid
+          || (resource.data.status == 'CLAIMED' && resource.data.guardianId == request.auth.uid))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','resolvedAt'])
+        && request.resource.data.status == 'CANCELLED' && request.resource.data.resolvedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /guardianLinks/{linkId} {
+      allow read: if request.auth != null && (resource.data.playerId == request.auth.uid || resource.data.guardianId == request.auth.uid);
+      function validActivation() {
+        let d = request.resource.data;
+        let invite = get(/databases/$(database)/documents/guardianInvites/$(d.inviteId)).data;
+        return request.auth != null && d.keys().hasAll(['playerId','guardianId','inviteId','status','activatedAt'])
+          && d.keys().hasOnly(['playerId','guardianId','inviteId','status','activatedAt'])
+          && d.playerId == request.auth.uid && d.guardianId is string && d.inviteId is string
+          && linkId == d.playerId + '_' + d.guardianId && d.status == 'ACTIVE' && d.activatedAt == request.time
+          && invite.status == 'CLAIMED' && invite.expiresAt > request.time
+          && invite.playerId == d.playerId && invite.guardianId == d.guardianId
+          && getAfter(/databases/$(database)/documents/guardianInvites/$(d.inviteId)).data.status == 'ACTIVE';
+      }
+      allow create: if validActivation();
+      allow update: if resource.data.status == 'REVOKED' && validActivation();
+      allow update: if request.auth != null && resource.data.status == 'ACTIVE'
+        && (resource.data.playerId == request.auth.uid || resource.data.guardianId == request.auth.uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','revokedAt','revokedBy'])
+        && request.resource.data.status == 'REVOKED' && request.resource.data.revokedBy == request.auth.uid
+        && request.resource.data.revokedAt == request.time;
+      allow delete: if false;
     }
 
     // US-04: vínculos jugador - padre o tutor. Solo el propio jugador los crea o elimina.
@@ -688,19 +804,7 @@ service cloud.firestore {
         || (request.auth.token.email_verified == true
           && resource.data.guardianEmail == request.auth.token.email.lower())
       );
-      allow create: if request.auth != null
-        && request.resource.data.keys().hasOnly(['playerId', 'playerName', 'guardianEmail', 'createdBy', 'createdAt'])
-        && request.resource.data.playerId == request.auth.uid
-        && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.playerName is string
-        && request.resource.data.playerName.size() <= 80
-        && request.resource.data.guardianEmail is string
-        && request.resource.data.guardianEmail.size() > 3
-        && request.resource.data.guardianEmail.size() <= 254
-        && request.resource.data.guardianEmail == request.resource.data.guardianEmail.lower()
-        && request.resource.data.guardianEmail != request.auth.token.email.lower()
-        && linkId == request.resource.data.playerId + '_' + request.resource.data.guardianEmail
-        && request.resource.data.createdAt == request.time;
+      allow create: if false;
       allow update: if false;
       allow delete: if request.auth != null && resource.data.playerId == request.auth.uid;
     }

@@ -76,7 +76,7 @@ class PlayersViewModel : ViewModel() {
         _uiState.update { it.copy(linkedLoading = true) }
         linkedListener = profileRepository.listenLinkedPlayers(
             onChange = { links -> _uiState.update { it.copy(linkedPlayers = links, linkedLoading = false) } },
-            onError = { message -> _uiState.update { it.copy(linkedLoading = false, error = message) } }
+            onError = { message -> _uiState.update { it.copy(linkedPlayers = emptyList(), linkedLoading = false, error = message) } }
         )
     }
 
