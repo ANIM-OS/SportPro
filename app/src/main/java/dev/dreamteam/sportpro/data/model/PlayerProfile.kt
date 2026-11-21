@@ -28,17 +28,23 @@ data class PlayerProfile(
     }
 }
 
-/**
- * Vínculo entre un jugador y el correo de su padre o tutor.
- * El id del documento es "{playerId}_{correo en minúsculas}".
- */
+/** Vínculo confirmado por el jugador: guardianLinks/{playerId}_{guardianId}. */
 data class GuardianLink(
     val id: String = "",
     val playerId: String = "",
     val playerName: String = "",
-    val guardianEmail: String = ""
-) {
-    companion object {
-        fun documentId(playerId: String, email: String): String = "${playerId}_${email.trim().lowercase()}"
-    }
-}
+    val guardianId: String = "",
+    val guardianName: String = "",
+    val status: String = "",
+    val inviteId: String = ""
+)
+
+data class GuardianInvite(
+    val id: String = "",
+    val playerId: String = "",
+    val playerName: String = "",
+    val status: String = "",
+    val guardianId: String = "",
+    val guardianName: String = "",
+    val expiresAt: Timestamp? = null
+)

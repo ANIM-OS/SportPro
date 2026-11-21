@@ -107,8 +107,7 @@ fun PlayersScreen(
                         uiState.linkedLoading -> item { LoadingBox() }
                         uiState.linkedPlayers.isEmpty() -> item {
                             EmptyState(
-                                "No tienes jugadores vinculados. El jugador debe agregar tu correo en la sección " +
-                                    "\"Padres o tutores\" de su perfil."
+                                "No tienes jugadores confirmados. Pide al jugador un código desde su perfil y acéptalo en Equipos → Convocatorias por partido."
                             )
                         }
                         else -> items(uiState.linkedPlayers, key = { "linked-${it.id}" }) { link ->

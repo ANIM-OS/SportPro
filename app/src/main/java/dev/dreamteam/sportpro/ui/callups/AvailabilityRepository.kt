@@ -5,13 +5,14 @@ import com.google.android.gms.tasks.Tasks
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.*
 
-data class AvailabilityResponse(val selectionId: String, val playerId: String, val status: String, val respondedBy: String)
+data class AvailabilityResponse(val selectionId: String, val playerId: String, val status: String,
+    val respondedBy: String, val pending: Boolean = false)
 
 class AvailabilityRepository {
     private val db = FirebaseFirestore.getInstance()
     private val responses = db.collection("matchAvailability")
     fun response(selectionId: String, change: (AvailabilityResponse?) -> Unit, error: (String) -> Unit) =
-        responses.document(selectionId).addSnapshotListener { doc, failure ->
+        responses.document(selectionId).addSnapshotListener(MetadataChanges.INCLUDE) { doc, failure ->
             if (failure != null) error("No se pudo consultar la disponibilidad")
             else change(doc?.takeIf { it.exists() }?.let(::parse))
         }
@@ -32,5 +33,5 @@ class AvailabilityRepository {
         ))
     }
     private fun parse(doc: DocumentSnapshot) = AvailabilityResponse(doc.id, doc.getString("playerId").orEmpty(),
-        doc.getString("status").orEmpty(), doc.getString("respondedBy").orEmpty())
+        doc.getString("status").orEmpty(), doc.getString("respondedBy").orEmpty(), doc.metadata.hasPendingWrites())
 }

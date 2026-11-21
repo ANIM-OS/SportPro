@@ -5,20 +5,24 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
+import com.google.android.gms.tasks.Tasks
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.firestore.Source
 import com.google.firebase.storage.FirebaseStorage
+import dev.dreamteam.sportpro.data.model.GuardianInvite
 import dev.dreamteam.sportpro.data.model.GuardianLink
 import dev.dreamteam.sportpro.data.model.PlayerProfile
 import java.io.ByteArrayOutputStream
+import java.util.Date
 
 /**
- * US-04: perfil del jugador (playerProfiles/{playerId}), su fotografía y los correos de
- * padres o tutores vinculados (playerGuardians), que habilitan la consulta de US-04, US-05 y US-08.
+ * Perfil del jugador y tutores confirmados mediante guardianInvites/guardianLinks.
  */
 class PlayerProfileRepository {
 
@@ -27,6 +31,7 @@ class PlayerProfileRepository {
     private val storage = FirebaseStorage.getInstance()
     private val profiles = firestore.collection(PROFILES)
     private val guardians = firestore.collection(GUARDIANS)
+    private val invites = firestore.collection(INVITES)
 
     fun listenProfile(playerId: String, onChange: (PlayerProfile?) -> Unit, onError: (String) -> Unit): ListenerRegistration =
         profiles.document(playerId).addSnapshotListener { snapshot, error ->
@@ -92,47 +97,116 @@ class PlayerProfileRepository {
         }
     }
 
-    fun listenGuardians(playerId: String, onChange: (List<GuardianLink>) -> Unit, onError: (String) -> Unit): ListenerRegistration =
-        guardians.whereEqualTo("playerId", playerId).addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                onError(error.userMessage("No se pudieron cargar los apoderados"))
-                return@addSnapshotListener
+    fun listenGuardians(playerId: String, onChange: (List<GuardianLink>) -> Unit, onError: (String) -> Unit): ListenerRegistration {
+        var generation = 0
+        return guardians.whereEqualTo("playerId", playerId).addSnapshotListener { snapshot, error ->
+            val current = ++generation
+            if (error != null) onError(error.userMessage("No se pudieron cargar los tutores"))
+            else {
+                val active = snapshot?.documents.orEmpty().mapNotNull(::guardianFromDocument).filter { it.status == "ACTIVE" }
+                if (active.isEmpty()) onChange(emptyList())
+                else Tasks.whenAllSuccess<DocumentSnapshot>(active.map { invites.document(it.inviteId).get() })
+                    .addOnSuccessListener { docs ->
+                        if (current == generation) onChange(active.mapIndexed { index, link ->
+                            link.copy(guardianName = docs[index].getString("guardianName").orEmpty())
+                        }.sortedBy { it.guardianName.lowercase() })
+                    }.addOnFailureListener { if (current == generation) onError(it.userMessage("No se pudieron cargar los nombres de los tutores")) }
             }
-            onChange(snapshot?.documents?.mapNotNull(::guardianFromDocument)?.sortedBy { it.guardianEmail }.orEmpty())
+        }
+    }
+
+    fun listenInvites(playerId: String, onChange: (List<GuardianInvite>) -> Unit, onError: (String) -> Unit): ListenerRegistration =
+        invites.whereEqualTo("playerId", playerId).addSnapshotListener { snapshot, error ->
+            if (error != null) onError(error.userMessage("No se pudieron cargar las invitaciones"))
+            else onChange(snapshot?.documents.orEmpty().mapNotNull(::inviteFromDocument)
+                .filter { it.status == "OPEN" || it.status == "CLAIMED" })
         }
 
-    fun addGuardian(playerId: String, playerName: String, email: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        val normalized = email.trim().lowercase()
-        guardians.document(GuardianLink.documentId(playerId, normalized)).set(
-            mapOf(
-                "playerId" to playerId,
-                "playerName" to playerName,
-                "guardianEmail" to normalized,
-                "createdBy" to auth.currentUser?.uid,
-                "createdAt" to FieldValue.serverTimestamp()
-            )
-        ).addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { onError(it.userMessage("No se pudo vincular al padre o tutor")) }
+    fun listenClaimedInvites(onChange: (List<GuardianInvite>) -> Unit, onError: (String) -> Unit): ListenerRegistration? {
+        val uid = auth.currentUser?.uid ?: run { onError("Inicia sesión de nuevo"); return null }
+        return invites.whereEqualTo("guardianId", uid).addSnapshotListener { snapshot, error ->
+            if (error != null) onError(error.userMessage("No se pudieron cargar tus solicitudes pendientes"))
+            else onChange(snapshot?.documents.orEmpty().mapNotNull(::inviteFromDocument).filter { it.status == "CLAIMED" })
+        }
+    }
+
+    fun listenLegacyGuardians(playerId: String, onChange: (List<String>) -> Unit, onError: (String) -> Unit): ListenerRegistration =
+        firestore.collection(LEGACY_GUARDIANS).whereEqualTo("playerId", playerId).addSnapshotListener { snapshot, error ->
+            if (error != null) onError(error.userMessage("No se pudieron comprobar los vínculos anteriores"))
+            else onChange(snapshot?.documents.orEmpty().mapNotNull { it.getString("guardianEmail") })
+        }
+
+    fun createInvite(playerId: String, playerName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        val user = auth.currentUser ?: return onError("Inicia sesión de nuevo")
+        user.reload().addOnSuccessListener {
+            user.getIdToken(true).addOnSuccessListener {
+                if (!user.isEmailVerified) onError("Verifica tu correo antes de invitar a un tutor")
+                else {
+                    val expiry = Timestamp(Date(System.currentTimeMillis() + 30 * 60 * 1000L))
+                    invites.document().set(mapOf("playerId" to playerId, "playerName" to playerName.trim(),
+                        "status" to "OPEN", "createdAt" to FieldValue.serverTimestamp(), "expiresAt" to expiry))
+                        .addOnSuccessListener { onSuccess() }
+                        .addOnFailureListener { onError(it.userMessage("No se pudo crear la invitación")) }
+                }
+            }.addOnFailureListener { onError(it.userMessage("No se pudo actualizar la sesión")) }
+        }.addOnFailureListener { onError(it.userMessage("No se pudo comprobar el correo")) }
+    }
+
+    fun claimInvite(code: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        val user = auth.currentUser ?: return onError("Inicia sesión para aceptar la invitación")
+        if (code.isBlank() || code.length > 100 || code.contains('/')) return onError("Código de invitación inválido")
+        user.getIdToken(true).addOnSuccessListener { token ->
+            val tokenName = token.claims["name"] as? String
+            val label = tokenName?.takeIf { it.isNotBlank() && it.length <= 80 } ?: user.email.orEmpty()
+            val ref = invites.document(code.trim())
+            ref.get(Source.SERVER).addOnSuccessListener { doc ->
+                if (!doc.exists()) return@addOnSuccessListener onError("Invitación inexistente o no disponible")
+                ref.update(mapOf("status" to "CLAIMED", "guardianId" to user.uid,
+                    "guardianName" to label, "claimedAt" to FieldValue.serverTimestamp()))
+                    .addOnSuccessListener { onSuccess() }
+                    .addOnFailureListener { onError(it.userMessage("No se pudo aceptar la invitación")) }
+            }.addOnFailureListener { onError(it.userMessage("No se pudo consultar la invitación")) }
+        }.addOnFailureListener { onError(it.userMessage("No se pudo actualizar la sesión")) }
+    }
+
+    fun confirmInvite(invite: GuardianInvite, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        val link = guardians.document("${invite.playerId}_${invite.guardianId}")
+        val batch = firestore.batch()
+        batch.update(invites.document(invite.id), mapOf("status" to "ACTIVE", "resolvedAt" to FieldValue.serverTimestamp()))
+        batch.set(link, mapOf("playerId" to invite.playerId, "guardianId" to invite.guardianId,
+            "inviteId" to invite.id, "status" to "ACTIVE", "activatedAt" to FieldValue.serverTimestamp()))
+        batch.commit().addOnSuccessListener { onSuccess() }
+            .addOnFailureListener { onError(it.userMessage("No se pudo confirmar al tutor")) }
+    }
+
+    fun cancelInvite(invite: GuardianInvite, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        invites.document(invite.id).update(mapOf("status" to "CANCELLED", "resolvedAt" to FieldValue.serverTimestamp()))
+            .addOnSuccessListener { onSuccess() }
+            .addOnFailureListener { onError(it.userMessage("No se pudo cancelar la invitación")) }
     }
 
     fun removeGuardian(link: GuardianLink, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        guardians.document(link.id).delete()
+        val uid = auth.currentUser?.uid ?: return onError("Inicia sesión de nuevo")
+        guardians.document(link.id).update(mapOf("status" to "REVOKED", "revokedAt" to FieldValue.serverTimestamp(), "revokedBy" to uid))
             .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { onError(it.userMessage("No se pudo quitar al padre o tutor")) }
+            .addOnFailureListener { onError(it.userMessage("No se pudo revocar al tutor")) }
     }
 
-    /** Jugadores vinculados al correo del padre o tutor que inició sesión. */
+    /** Jugadores con vínculo activo para el tutor autenticado. */
     fun listenLinkedPlayers(onChange: (List<GuardianLink>) -> Unit, onError: (String) -> Unit): ListenerRegistration? {
-        val email = auth.currentUser?.email?.trim()?.lowercase() ?: run {
-            onError("Tu cuenta no tiene un correo asociado")
-            return null
-        }
-        return guardians.whereEqualTo("guardianEmail", email).addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                onError(error.userMessage("No se pudieron cargar los jugadores a tu cargo"))
-                return@addSnapshotListener
-            }
-            onChange(snapshot?.documents?.mapNotNull(::guardianFromDocument)?.sortedBy { it.playerName.lowercase() }.orEmpty())
+        val uid = auth.currentUser?.uid ?: run { onError("Inicia sesión de nuevo"); return null }
+        var generation = 0
+        return guardians.whereEqualTo("guardianId", uid).addSnapshotListener { snapshot, error ->
+            val current = ++generation
+            if (error != null) return@addSnapshotListener onError(error.userMessage("No se pudieron cargar los jugadores a tu cargo"))
+            val active = snapshot?.documents.orEmpty().mapNotNull(::guardianFromDocument).filter { it.status == "ACTIVE" }
+            if (active.isEmpty()) return@addSnapshotListener onChange(emptyList())
+            val tasks = active.map { invites.document(it.inviteId).get() }
+            Tasks.whenAllSuccess<DocumentSnapshot>(tasks).addOnSuccessListener { docs ->
+                if (current == generation) onChange(active.mapIndexed { index, link ->
+                    link.copy(playerName = docs[index].getString("playerName").orEmpty())
+                }.sortedBy { it.playerName.lowercase() })
+            }.addOnFailureListener { if (current == generation) onError(it.userMessage("No se pudieron cargar los nombres de los jugadores")) }
         }
     }
 
@@ -193,19 +267,22 @@ class PlayerProfileRepository {
         updatedAt = doc.getTimestamp("updatedAt")
     )
 
-    private fun guardianFromDocument(doc: DocumentSnapshot): GuardianLink? {
-        val playerId = doc.getString("playerId") ?: return null
-        return GuardianLink(
-            id = doc.id,
-            playerId = playerId,
-            playerName = doc.getString("playerName").orEmpty(),
-            guardianEmail = doc.getString("guardianEmail").orEmpty()
-        )
-    }
+    private fun guardianFromDocument(doc: DocumentSnapshot): GuardianLink? = GuardianLink(
+        id = doc.id, playerId = doc.getString("playerId") ?: return null,
+        guardianId = doc.getString("guardianId") ?: return null,
+        status = doc.getString("status").orEmpty(), inviteId = doc.getString("inviteId").orEmpty())
+
+    private fun inviteFromDocument(doc: DocumentSnapshot): GuardianInvite? = GuardianInvite(
+        id = doc.id, playerId = doc.getString("playerId") ?: return null,
+        playerName = doc.getString("playerName").orEmpty(), status = doc.getString("status").orEmpty(),
+        guardianId = doc.getString("guardianId").orEmpty(), guardianName = doc.getString("guardianName").orEmpty(),
+        expiresAt = doc.getTimestamp("expiresAt"))
 
     companion object {
         const val PROFILES = "playerProfiles"
-        const val GUARDIANS = "playerGuardians"
+        const val GUARDIANS = "guardianLinks"
+        const val INVITES = "guardianInvites"
+        const val LEGACY_GUARDIANS = "playerGuardians"
         private const val MAX_PHOTO_BYTES = 2L * 1024 * 1024
         // Por debajo del límite de 800000 caracteres de las reglas de Firestore.
         private const val MAX_PHOTO_BASE64 = 700_000

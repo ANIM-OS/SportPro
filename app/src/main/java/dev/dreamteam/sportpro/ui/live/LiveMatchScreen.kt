@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.google.firebase.auth.FirebaseAuth
 import dev.dreamteam.sportpro.data.model.GuardianLink
 import dev.dreamteam.sportpro.data.model.Team
 import dev.dreamteam.sportpro.data.repository.PlayerProfileRepository
@@ -123,6 +124,10 @@ private fun PlayerMatch(row: PlayerCallup, repository: CallupRepository) {
 
 @Composable
 private fun GuardianMatches() {
+    if (FirebaseAuth.getInstance().currentUser?.isEmailVerified != true) {
+        Text("Verifica tu correo en Equipos → Convocatorias por partido para consultar a tus jugadores.")
+        return
+    }
     val profiles = remember { PlayerProfileRepository() }
     val repository = remember { CallupRepository() }
     var links by remember { mutableStateOf<List<GuardianLink>>(emptyList()) }

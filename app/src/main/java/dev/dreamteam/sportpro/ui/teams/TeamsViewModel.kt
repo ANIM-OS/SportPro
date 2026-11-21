@@ -20,6 +20,7 @@ import com.google.android.gms.tasks.Tasks
 import dev.dreamteam.sportpro.data.model.Team
 import dev.dreamteam.sportpro.data.model.TeamInvite
 import dev.dreamteam.sportpro.data.model.TeamJoinCode
+import dev.dreamteam.sportpro.data.model.TeamJoinRequest
 import dev.dreamteam.sportpro.data.model.TeamLineup
 import dev.dreamteam.sportpro.data.model.TeamMember
 import dev.dreamteam.sportpro.domain.access.TeamAccess
@@ -55,9 +56,12 @@ data class TeamsUiState(
     val lineup: TeamLineup? = null,
     val lineupLoading: Boolean = false,
     val managementError: String? = null,
+    val managementMessage: String? = null,
     val managementBusy: Boolean = false,
     val joinCode: TeamJoinCode? = null,
-    val pendingJoinCode: TeamJoinCode? = null
+    val pendingJoinCode: TeamJoinCode? = null,
+    val joinRequests: List<TeamJoinRequest> = emptyList(),
+    val myJoinRequests: List<TeamJoinRequest> = emptyList()
 )
 
 data class TeamDetails(
@@ -79,6 +83,8 @@ class TeamsViewModel : ViewModel() {
     private var rosterListener: ListenerRegistration? = null
     private var lineupListener: ListenerRegistration? = null
     private var joinCodeListener: ListenerRegistration? = null
+    private var joinRequestsListener: ListenerRegistration? = null
+    private var myJoinRequestsListener: ListenerRegistration? = null
     private var managementGeneration = 0
     private var joinCodeGeneration = 0
     private var generation = 0
@@ -107,6 +113,7 @@ class TeamsViewModel : ViewModel() {
         ownedListener?.remove()
         membershipsListener?.remove()
         invitesListener?.remove()
+        myJoinRequestsListener?.remove()
         val currentGeneration = ++generation
         ownedLoaded = false
         membershipsLoaded = false
@@ -123,6 +130,7 @@ class TeamsViewModel : ViewModel() {
                 emailVerified = user.isEmailVerified,
                 teams = emptyList(),
                 pendingInvites = emptyList(),
+                myJoinRequests = emptyList(),
                 isLoading = true,
                 teamsError = null,
                 invitesError = null
@@ -153,6 +161,14 @@ class TeamsViewModel : ViewModel() {
                         .forEach { loadMemberTeam(it, currentGeneration) }
                 }
                 publishTeams()
+            }
+
+        myJoinRequestsListener = firestore.collection("teamJoinRequests")
+            .whereEqualTo("playerId", user.uid).addSnapshotListener { snapshot, error ->
+                if (currentGeneration != generation) return@addSnapshotListener
+                if (error != null) _uiState.update { it.copy(myJoinRequests = emptyList(),
+                    managementError = error.localizedMessage ?: "No se pudieron cargar tus solicitudes de ingreso") }
+                else _uiState.update { it.copy(myJoinRequests = snapshot?.documents.orEmpty().mapNotNull(::joinRequestFromDocument)) }
             }
 
         if (user.isEmailVerified) {
@@ -263,11 +279,13 @@ class TeamsViewModel : ViewModel() {
         rosterListener?.remove()
         lineupListener?.remove()
         joinCodeListener?.remove()
+        joinRequestsListener?.remove()
         joinCodeGeneration++
         val currentGeneration = ++managementGeneration
         _uiState.update {
             it.copy(selectedTeamId = team.id, members = emptyList(), membersLoading = true,
-                lineup = null, lineupLoading = false, managementError = null, joinCode = null)
+                lineup = null, lineupLoading = false, managementError = null, joinCode = null,
+                joinRequests = emptyList())
         }
         rosterListener = firestore.collection("teamMemberships")
             .whereEqualTo("teamId", team.id)
@@ -284,6 +302,14 @@ class TeamsViewModel : ViewModel() {
                     _uiState.update { it.copy(members = members, membersLoading = false, managementError = null) }
                 }
             }
+        if (owns(team)) joinRequestsListener = firestore.collection("teamJoinRequests")
+            .whereEqualTo("teamId", team.id).addSnapshotListener { snapshot, error ->
+                if (currentGeneration != managementGeneration) return@addSnapshotListener
+                if (error != null) _uiState.update { it.copy(joinRequests = emptyList(),
+                    managementError = error.localizedMessage ?: "No se pudieron cargar las solicitudes de ingreso") }
+                else _uiState.update { it.copy(joinRequests = snapshot?.documents.orEmpty().mapNotNull(::joinRequestFromDocument)
+                    .filter { request -> request.status == "PENDING" }) }
+            }
     }
 
     fun closeTeam() {
@@ -292,8 +318,9 @@ class TeamsViewModel : ViewModel() {
         rosterListener?.remove()
         lineupListener?.remove()
         joinCodeListener?.remove()
+        joinRequestsListener?.remove()
         _uiState.update { it.copy(selectedTeamId = null, members = emptyList(), lineup = null,
-            joinCode = null, managementError = null) }
+            joinCode = null, joinRequests = emptyList(), managementError = null) }
     }
 
     fun watchLineup(team: Team, category: String) {
@@ -458,6 +485,13 @@ class TeamsViewModel : ViewModel() {
         return TeamJoinCode(doc.id, teamId, teamName, categories, expiresAt)
     }
 
+    private fun joinRequestFromDocument(doc: DocumentSnapshot): TeamJoinRequest? = TeamJoinRequest(
+        id = doc.id, teamId = doc.getString("teamId") ?: return null,
+        playerId = doc.getString("playerId") ?: return null,
+        playerName = doc.getString("playerName").orEmpty(),
+        category = doc.getString("category").orEmpty(), status = doc.getString("status").orEmpty(),
+        teamName = doc.getString("teamName").orEmpty())
+
     fun clearJoinCode() { _uiState.update { it.copy(joinCode = null) } }
 
     fun loadJoinCode(rawValue: String) {
@@ -501,22 +535,46 @@ class TeamsViewModel : ViewModel() {
             _uiState.update { it.copy(managementError = "Ingresa tu nombre y selecciona una categoría") }
             return
         }
-        _uiState.update { it.copy(managementBusy = true, managementError = null) }
-        val batch = firestore.batch()
-        batch.set(firestore.collection("teamMemberships").document("${code.teamId}_${user.uid}"), mapOf(
-            "teamId" to code.teamId, "userId" to user.uid, "joinCodeId" to code.id,
-            "playerName" to playerName.trim(), "category" to category,
-            "acceptedAt" to FieldValue.serverTimestamp()
-        ))
-        batch.update(firestore.collection("teamJoinCodes").document(code.id), mapOf(
-            "usedBy" to user.uid, "usedAt" to FieldValue.serverTimestamp()
-        ))
-        batch.commit().addOnSuccessListener {
-            _uiState.update { it.copy(managementBusy = false, pendingJoinCode = null) }
-            loadTeams()
-        }.addOnFailureListener { error ->
-            _uiState.update { it.copy(managementBusy = false, managementError = error.localizedMessage ?: "No se pudo registrar en el equipo") }
+        _uiState.update { it.copy(managementBusy = true, managementError = null, managementMessage = null) }
+        val requestRef = firestore.collection("teamJoinRequests").document("${code.teamId}_${user.uid}")
+        if (_uiState.value.myJoinRequests.any { it.id == requestRef.id && it.status == "PENDING" }) {
+            _uiState.update { it.copy(managementBusy = false, pendingJoinCode = null,
+                managementMessage = "Tu solicitud ya está pendiente de aprobación") }
+            return
         }
+        requestRef.set(mapOf("teamId" to code.teamId, "teamName" to code.teamName,
+            "playerId" to user.uid, "codeId" to code.id, "playerName" to playerName.trim(),
+            "category" to category, "status" to "PENDING", "createdAt" to FieldValue.serverTimestamp()))
+            .addOnSuccessListener { _uiState.update { it.copy(managementBusy = false, pendingJoinCode = null,
+                managementMessage = "Solicitud enviada. El entrenador debe aprobar tu ingreso.") } }
+            .addOnFailureListener { error -> _uiState.update { it.copy(managementBusy = false,
+                managementError = error.localizedMessage ?: "No se pudo enviar la solicitud; comprueba si ya está pendiente") } }
+    }
+
+    fun resolveJoinRequest(team: Team, request: TeamJoinRequest, approve: Boolean) {
+        if (!owns(team) || request.teamId != team.id || request.status != "PENDING") return
+        _uiState.update { it.copy(managementBusy = true, managementError = null, managementMessage = null) }
+        val batch = firestore.batch()
+        batch.update(firestore.collection("teamJoinRequests").document(request.id),
+            mapOf("status" to if (approve) "APPROVED" else "DECLINED", "resolvedAt" to FieldValue.serverTimestamp()))
+        if (approve) batch.set(firestore.collection("teamMemberships").document("${team.id}_${request.playerId}"),
+            mapOf("teamId" to team.id, "userId" to request.playerId, "requestId" to request.id,
+                "playerName" to request.playerName, "category" to request.category,
+                "acceptedAt" to FieldValue.serverTimestamp()))
+        batch.commit().addOnSuccessListener { _uiState.update { it.copy(managementBusy = false,
+            managementMessage = if (approve) "Jugador incorporado al equipo" else "Solicitud rechazada") } }
+            .addOnFailureListener { error -> _uiState.update { it.copy(managementBusy = false,
+                managementError = error.localizedMessage ?: "No se pudo resolver la solicitud") } }
+    }
+
+    fun cancelJoinRequest(request: TeamJoinRequest) {
+        if (request.playerId != auth.currentUser?.uid || request.status != "PENDING") return
+        _uiState.update { it.copy(managementBusy = true, managementError = null) }
+        firestore.collection("teamJoinRequests").document(request.id).delete()
+            .addOnSuccessListener { _uiState.update { it.copy(managementBusy = false,
+                managementMessage = "Solicitud cancelada") } }
+            .addOnFailureListener { error -> _uiState.update { it.copy(managementBusy = false,
+                managementError = error.localizedMessage ?: "No se pudo cancelar la solicitud") } }
     }
 
     fun saveTeamDetails(team: Team, details: TeamDetails, onSuccess: () -> Unit) {
@@ -579,6 +637,7 @@ class TeamsViewModel : ViewModel() {
         val failure: (Exception) -> Unit = { error ->
             _uiState.update { it.copy(deletingTeamId = null, teamActionError = error.localizedMessage ?: "No se pudo eliminar el equipo. Puedes reintentar.") }
         }
+        deleteRelated("teamJoinRequests", team.id, {
         deleteRelated("teamJoinCodes", team.id, {
           deleteRelated("teamLineups", team.id, {
            deleteRelated("teamInvites", team.id, {
@@ -605,6 +664,7 @@ class TeamsViewModel : ViewModel() {
             }, failure)
            }, failure)
           }, failure)
+        }, failure)
         }, failure)
     }
 
@@ -886,9 +946,11 @@ class TeamsViewModel : ViewModel() {
         ownedListener?.remove()
         membershipsListener?.remove()
         invitesListener?.remove()
+        myJoinRequestsListener?.remove()
         rosterListener?.remove()
         lineupListener?.remove()
         joinCodeListener?.remove()
+        joinRequestsListener?.remove()
         super.onCleared()
     }
 }
