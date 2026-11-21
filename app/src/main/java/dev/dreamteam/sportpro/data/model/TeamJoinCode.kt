@@ -9,3 +9,13 @@ data class TeamJoinCode(
     val categories: List<String>,
     val expiresAt: Timestamp
 )
+
+data class TeamJoinRequest(
+    val id: String,
+    val teamId: String,
+    val playerId: String,
+    val playerName: String,
+    val category: String,
+    val status: String,
+    val teamName: String = ""
+)

@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Shield
@@ -37,6 +38,17 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
+import dev.dreamteam.sportpro.ui.tryouts.CreateTryoutScreen
+import dev.dreamteam.sportpro.ui.tryouts.TryoutsScreen
+import dev.dreamteam.sportpro.ui.tryouts.TryoutsViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -53,17 +65,17 @@ import dev.dreamteam.sportpro.ui.auth.AppRole
 import dev.dreamteam.sportpro.ui.auth.RoleAccess
 import dev.dreamteam.sportpro.ui.auth.RoleCapability
 import dev.dreamteam.sportpro.ui.community.CommunityScreen
+import dev.dreamteam.sportpro.ui.community.CommunityViewModel
 import dev.dreamteam.sportpro.ui.community.CreatePostScreen
+import dev.dreamteam.sportpro.ui.training.TrainingNavHost
 import dev.dreamteam.sportpro.ui.community.PostCommentsScreen
 import dev.dreamteam.sportpro.ui.events.EventCatalogEditScreen
 import dev.dreamteam.sportpro.ui.events.EventCatalogScreen
 import dev.dreamteam.sportpro.ui.events.EventDetailScreen
 import dev.dreamteam.sportpro.ui.events.EventEditScreen
 import dev.dreamteam.sportpro.ui.events.EventHistoryScreen
-import dev.dreamteam.sportpro.ui.events.LiveEventsEntryScreen
+import dev.dreamteam.sportpro.domain.access.COACH_PENDING_MESSAGE
 import dev.dreamteam.sportpro.ui.events.RegisterEventScreen
-import dev.dreamteam.sportpro.ui.events.MatchesForUs13Screen
-import dev.dreamteam.sportpro.ui.events.MatchDetailUs13Screen
 import dev.dreamteam.sportpro.ui.teams.TeamsScreen
 import dev.dreamteam.sportpro.ui.teams.CreateTeamScreen
 import dev.dreamteam.sportpro.ui.live.LiveMatchScreen
@@ -80,7 +92,7 @@ sealed class SportProRoute(
 
     data object Live : SportProRoute(
         route = "live",
-        title = "En vivo"
+        title = "Partidos"
     )
 
     data object Statistics : SportProRoute(
@@ -98,6 +110,12 @@ sealed class SportProRoute(
         title = "Nueva publicación"
     )
 
+    // US-20: se abre desde la pestaña Convocatorias de Comunidad
+    data object CreateTryout : SportProRoute(
+        route = "create_tryout",
+        title = "Nuevo aviso"
+    )
+
     data object Teams : SportProRoute(
         route = "teams",
         title = "Equipos"
@@ -106,6 +124,11 @@ sealed class SportProRoute(
     data object CreateTeam : SportProRoute(
         route = "create_team",
         title = "Nuevo equipo"
+    )
+
+    data object Training : SportProRoute(
+        route = "training",
+        title = "Entrenar"
     )
 
     // ── US-12 · Catálogo configurable de eventos del partido ──
@@ -121,12 +144,6 @@ sealed class SportProRoute(
         const val ARG_TYPE_ID = "typeId"
         fun create(typeId: String? = null) =
             if (typeId == null) "event_catalog_edit" else "event_catalog_edit?typeId=$typeId"
-    }
-
-    data object Matches : SportProRoute("matches_us13", "Partidos")
-    data object MatchDetail : SportProRoute("match_us13/{matchId}", "Detalle del partido") {
-        const val ARG_MATCH_ID = "matchId"
-        fun create(matchId: String) = "match_us13/$matchId"
     }
 
     // ── US-13 · Registro dinámico de eventos en vivo ──
@@ -181,7 +198,7 @@ sealed class SportProRoute(
 fun SportProNavGraph(
     userEmail: String,
     roles: Set<AppRole>,
-    coachApproved: Boolean,
+    coachApproved: Boolean?,
     onLogout: () -> Unit,
     onEditRoles: () -> Unit,
     isLoading: Boolean = false,
@@ -195,89 +212,105 @@ fun SportProNavGraph(
         SportProRoute.Live,
         SportProRoute.Statistics,
         SportProRoute.Community,
-        SportProRoute.Teams
+        SportProRoute.Teams,
+        SportProRoute.Training
     )
 
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = currentBackStackEntry?.destination?.route
+    val isCoachApproved = coachApproved == true
+    val coachPending = AppRole.COACH in roles && coachApproved == false
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "Sport",
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp
-                        )
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text(
-                            text = "Pro",
-                            color = MaterialTheme.colorScheme.onBackground,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp
-                        )
-                    }
-                },
-                actions = {
-                    // Roles management button
-                    TextButton(
-                        onClick = onEditRoles,
-                        modifier = Modifier.padding(end = 4.dp)
-                    ) {
-                        Text(
-                            text = "Roles",
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
-                        )
-                    }
-
-                    // Theme toggle pill button
-                    Surface(
-                        onClick = onToggleTheme,
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant),
-                        modifier = Modifier.padding(end = 4.dp)
-                    ) {
-                        Text(
-                            text = if (isDarkTheme) "🌙 MODO OSCURO" else "☀️ MODO CLARO",
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    // Logout button
-                    TextButton(
-                        onClick = onLogout,
-                        enabled = !isLoading,
-                        modifier = Modifier.padding(end = 8.dp)
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        } else {
+            Column {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "Cerrar sesión",
-                                color = Color(0xFFFF5252),
+                                text = "Sport",
+                                color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
+                                fontSize = 20.sp
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(
+                                text = "Pro",
+                                color = MaterialTheme.colorScheme.onBackground,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp
                             )
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    },
+                    actions = {
+                        // Roles management button
+                        TextButton(
+                            onClick = onEditRoles,
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            Text(
+                                text = "Roles",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                        }
+    
+                        // Theme toggle pill button
+                        Surface(
+                            onClick = onToggleTheme,
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant),
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            Text(
+                                text = if (isDarkTheme) "🌙 MODO OSCURO" else "☀️ MODO CLARO",
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+    
+                        // Logout button
+                        TextButton(
+                            onClick = onLogout,
+                            enabled = !isLoading,
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else {
+                                Text(
+                                    text = "Cerrar sesión",
+                                    color = Color(0xFFFF5252),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
                 )
-            )
+                if (coachPending) {
+                    Text(
+                        text = COACH_PENDING_MESSAGE,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 13.sp
+                    )
+                }
+            }
         },
         bottomBar = {
             NavigationBar(
@@ -307,6 +340,7 @@ fun SportProNavGraph(
                                     SportProRoute.Statistics -> Icons.Default.BarChart
                                     SportProRoute.Community -> Icons.Default.Groups
                                     SportProRoute.Teams -> Icons.Default.Shield
+                                    SportProRoute.Training -> Icons.Default.FitnessCenter
                                     // CreatePost, CreateTeam y las rutas de US-12/13/14/19 no están en la barra
                                     else -> Icons.Default.Add
                                 },
@@ -342,17 +376,16 @@ fun SportProNavGraph(
                 HomeScreenContent(
                     userEmail = userEmail,
                     onLogout = onLogout,
-                    isLoading = isLoading,
-                    canManageCatalog = RoleAccess.can(roles, RoleCapability.MANAGE_EVENT_CATALOG, coachApproved),
-                    onOpenCatalog = { navController.navigate(SportProRoute.EventCatalog.route) },
-                    onOpenMatches = { navController.navigate(SportProRoute.Matches.route) }
+                    isLoading = isLoading
                 )
             }
 
-            // Pantalla En vivo original: recibe cero argumentos.
-            // US-13 usa rutas propias de Partidos y Registro de eventos.
             composable(SportProRoute.Live.route) {
-                LiveMatchScreen()
+                LiveMatchScreen(
+                    isCoach = AppRole.COACH in roles,
+                    isPlayer = AppRole.PLAYER in roles,
+                    isGuardian = AppRole.PARENT in roles
+                )
             }
 
             composable(SportProRoute.Statistics.route) {
@@ -360,25 +393,68 @@ fun SportProNavGraph(
             }
 
             composable(SportProRoute.Community.route) {
-                CommunityScreen(
-                    canCreatePost = RoleAccess.can(roles, RoleCapability.CREATE_POST),
-                    onCreatePostClick = {
-                        navController.navigate(
-                            SportProRoute.CreatePost.route
-                        )
-                    },
-                    onOpenComments = { postId ->
-                        navController.navigate(SportProRoute.PostComments.create(postId))
+                // La barra inferior ya tiene 5 destinos: Convocatorias (US-20) es una pestaña de Comunidad.
+                var communityTab by rememberSaveable { mutableIntStateOf(0) }
+                Column(modifier = Modifier.fillMaxSize()) {
+                    PrimaryTabRow(
+                        selectedTabIndex = communityTab,
+                        containerColor = MaterialTheme.colorScheme.background
+                    ) {
+                        Tab(selected = communityTab == 0, onClick = { communityTab = 0 }, text = { Text("PUBLICACIONES") })
+                        Tab(selected = communityTab == 1, onClick = { communityTab = 1 }, text = { Text("CONVOCATORIAS") })
                     }
-                )
+                    Box(modifier = Modifier.weight(1f)) {
+                        if (communityTab == 0) {
+                            CommunityScreen(
+                                canCreatePost = RoleAccess.can(roles, RoleCapability.CREATE_POST, isCoachApproved),
+                                onCreatePostClick = {
+                                    navController.navigate(
+                                        SportProRoute.CreatePost.route
+                                    )
+                                },
+                                onOpenComments = { postId ->
+                                    navController.navigate(SportProRoute.PostComments.create(postId))
+                                }
+                            )
+                        } else {
+                            TryoutsScreen(
+                                canPublish = RoleAccess.can(roles, RoleCapability.PUBLISH_TRYOUT, isCoachApproved),
+                                onCreateClick = { navController.navigate(SportProRoute.CreateTryout.route) }
+                            )
+                        }
+                    }
+                }
             }
 
-            composable(SportProRoute.CreatePost.route) {
-                RoleGate(roles, RoleCapability.CREATE_POST, true) {
-                    CreatePostScreen(
+            composable(SportProRoute.CreateTryout.route) { entry ->
+                // Mismo ViewModel que la pestaña Convocatorias, como en CreatePost.
+                val communityEntry = remember(entry) {
+                    runCatching { navController.getBackStackEntry(SportProRoute.Community.route) }.getOrDefault(entry)
+                }
+                RoleGate(roles, RoleCapability.PUBLISH_TRYOUT, isCoachApproved) {
+                    CreateTryoutScreen(
                         onBack = {
-                            navController.popBackStack()
-                        }
+                            navController.popBackStack(SportProRoute.CreateTryout.route, inclusive = true)
+                        },
+                        viewModel = viewModel<TryoutsViewModel>(viewModelStoreOwner = communityEntry)
+                    )
+                }
+            }
+
+            composable(SportProRoute.CreatePost.route) { entry ->
+                // Mismo ViewModel que Comunidad: un solo juego de listeners y la
+                // lista sabe cuándo se publicó para volver arriba.
+                val communityEntry = remember(entry) {
+                    runCatching { navController.getBackStackEntry(SportProRoute.Community.route) }.getOrDefault(entry)
+                }
+                RoleGate(roles, RoleCapability.CREATE_POST, isCoachApproved) {
+                    CreatePostScreen(
+                        // Solo quita el formulario: si el usuario ya salió mientras se
+                        // publicaba, la confirmación no debe sacarlo también de Comunidad.
+                        onBack = {
+                            navController.popBackStack(SportProRoute.CreatePost.route, inclusive = true)
+                        },
+                        viewModel = viewModel<CommunityViewModel>(viewModelStoreOwner = communityEntry)
                     )
                 }
             }
@@ -387,9 +463,9 @@ fun SportProNavGraph(
                 val backStackEntry by navController.currentBackStackEntryAsState()
                 val createdTeamId = backStackEntry?.savedStateHandle?.get<String>("createdTeamId")
                 TeamsScreen(
-                    canCreateTeam = RoleAccess.can(roles, RoleCapability.CREATE_TEAM, true),
-                    coachNeedsApproval = false,
-                    canJoinWithCode = RoleAccess.can(roles, RoleCapability.JOIN_WITH_CODE),
+                    canCreateTeam = RoleAccess.can(roles, RoleCapability.CREATE_TEAM, isCoachApproved),
+                    canJoinWithCode = RoleAccess.can(roles, RoleCapability.JOIN_WITH_CODE, isCoachApproved),
+                    canRespondAsGuardian = AppRole.PARENT in roles,
                     newlyCreatedTeamId = createdTeamId,
                     onNewTeamOpened = { backStackEntry?.savedStateHandle?.remove<String>("createdTeamId") },
                     onCreateTeamClick = {
@@ -398,10 +474,14 @@ fun SportProNavGraph(
                 )
             }
 
+            composable(SportProRoute.Training.route) {
+                TrainingNavHost(roles = roles, isCoachApproved = isCoachApproved)
+            }
+
             composable(SportProRoute.CreateTeam.route) {
-                RoleGate(roles, RoleCapability.CREATE_TEAM, true) {
+                RoleGate(roles, RoleCapability.CREATE_TEAM, isCoachApproved) {
                     CreateTeamScreen(
-                        canCreateTeam = RoleAccess.can(roles, RoleCapability.CREATE_TEAM, true),
+                        canCreateTeam = RoleAccess.can(roles, RoleCapability.CREATE_TEAM, isCoachApproved),
                         onBack = {
                             navController.popBackStack()
                         },
@@ -415,7 +495,7 @@ fun SportProNavGraph(
 
             // ───────── US-12 · Catálogo de eventos ─────────
             composable(SportProRoute.EventCatalog.route) {
-                RoleGate(roles, RoleCapability.MANAGE_EVENT_CATALOG) {
+                RoleGate(roles, RoleCapability.MANAGE_EVENT_CATALOG, isCoachApproved) {
                     EventCatalogScreen(
                         onBack = { navController.popBackStack() },
                         onNewType = { navController.navigate(SportProRoute.EventCatalogEdit.create()) },
@@ -436,31 +516,12 @@ fun SportProNavGraph(
                     }
                 )
             ) { entry ->
-                RoleGate(roles, RoleCapability.MANAGE_EVENT_CATALOG) {
+                RoleGate(roles, RoleCapability.MANAGE_EVENT_CATALOG, isCoachApproved) {
                     EventCatalogEditScreen(
                         typeId = entry.arguments?.getString(SportProRoute.EventCatalogEdit.ARG_TYPE_ID),
                         onBack = { navController.popBackStack() }
                     )
                 }
-            }
-
-            composable(SportProRoute.Matches.route) {
-                MatchesForUs13Screen(
-                    onBack = { navController.popBackStack() },
-                    onOpenMatch = { navController.navigate(SportProRoute.MatchDetail.create(it)) }
-                )
-            }
-            composable(
-                SportProRoute.MatchDetail.route,
-                arguments = listOf(navArgument(SportProRoute.MatchDetail.ARG_MATCH_ID) { type = NavType.StringType })
-            ) { entry ->
-                val matchId = entry.arguments?.getString(SportProRoute.MatchDetail.ARG_MATCH_ID).orEmpty()
-                MatchDetailUs13Screen(
-                    matchId = matchId,
-                    canRegister = RoleAccess.can(roles, RoleCapability.REGISTER_EVENTS, coachApproved),
-                    onBack = { navController.popBackStack() },
-                    onRegister = { navController.navigate(SportProRoute.RegisterEvent.create(matchId)) }
-                )
             }
 
             // ───────── US-13 · Registro de eventos en vivo ─────────
@@ -470,7 +531,7 @@ fun SportProNavGraph(
                     navArgument(SportProRoute.RegisterEvent.ARG_MATCH_ID) { type = NavType.StringType }
                 )
             ) { entry ->
-                RoleGate(roles, RoleCapability.REGISTER_EVENTS) {
+                RoleGate(roles, RoleCapability.REGISTER_EVENTS, isCoachApproved) {
                     RegisterEventScreen(
                         matchId = entry.arguments?.getString(SportProRoute.RegisterEvent.ARG_MATCH_ID).orEmpty(),
                         onBack = { navController.popBackStack() },
@@ -492,7 +553,7 @@ fun SportProNavGraph(
                 EventDetailScreen(
                     matchId = matchId,
                     eventId = eventId,
-                    canEdit = RoleAccess.can(roles, RoleCapability.EDIT_EVENTS),
+                    canEdit = RoleAccess.can(roles, RoleCapability.EDIT_EVENTS, isCoachApproved),
                     onBack = { navController.popBackStack() },
                     onCorrect = { navController.navigate(SportProRoute.EventEdit.create(matchId, eventId)) },
                     onVoided = { navController.popBackStack() },
@@ -507,7 +568,7 @@ fun SportProNavGraph(
                     navArgument(SportProRoute.EventEdit.ARG_EVENT_ID) { type = NavType.StringType }
                 )
             ) { entry ->
-                RoleGate(roles, RoleCapability.EDIT_EVENTS) {
+                RoleGate(roles, RoleCapability.EDIT_EVENTS, isCoachApproved) {
                     EventEditScreen(
                         matchId = entry.arguments?.getString(SportProRoute.EventEdit.ARG_MATCH_ID).orEmpty(),
                         eventId = entry.arguments?.getString(SportProRoute.EventEdit.ARG_EVENT_ID).orEmpty(),
@@ -540,7 +601,7 @@ fun SportProNavGraph(
             ) { entry ->
                 PostCommentsScreen(
                     postId = entry.arguments?.getString(SportProRoute.PostComments.ARG_POST_ID).orEmpty(),
-                    canComment = RoleAccess.can(roles, RoleCapability.COMMENT_POST),
+                    canComment = RoleAccess.can(roles, RoleCapability.COMMENT_POST, isCoachApproved),
                     onBack = { navController.popBackStack() }
                 )
             }
@@ -552,10 +613,7 @@ fun SportProNavGraph(
 private fun HomeScreenContent(
     userEmail: String,
     onLogout: () -> Unit,
-    isLoading: Boolean,
-    canManageCatalog: Boolean,
-    onOpenCatalog: () -> Unit,
-    onOpenMatches: () -> Unit
+    isLoading: Boolean
 ) {
     Column(
         modifier = Modifier
@@ -608,33 +666,7 @@ private fun HomeScreenContent(
                     fontSize = 14.sp
                 )
 
-                Spacer(modifier = Modifier.height(24.dp))
-
-                Button(
-                    onClick = onOpenMatches,
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                ) {
-                    Text("PARTIDOS", color = Color.White, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.weight(1f))
-                    Text("→", color = Color.White, fontWeight = FontWeight.Bold)
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-
-                if (canManageCatalog) {
-                    Button(
-                        onClick = onOpenCatalog,
-                        modifier = Modifier.fillMaxWidth().height(52.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Text("CATÁLOGO DE EVENTOS", color = Color.White, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.weight(1f))
-                        Text("→", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
+                Spacer(modifier = Modifier.height(32.dp))
 
                 Button(
                     onClick = onLogout,
@@ -667,11 +699,14 @@ private fun HomeScreenContent(
 }
 
 @Composable
-private fun RoleGate(roles: Set<AppRole>, capability: RoleCapability, coachApproved: Boolean = true, content: @Composable () -> Unit) {
+private fun RoleGate(roles: Set<AppRole>, capability: RoleCapability, coachApproved: Boolean, content: @Composable () -> Unit) {
     if (RoleAccess.can(roles, capability, coachApproved)) {
         content()
     } else {
-        PlaceholderScreen(title = "SIN ACCESO", subtitle = "Tu rol no permite abrir esta página")
+        PlaceholderScreen(
+            title = "SIN ACCESO",
+            subtitle = if (AppRole.COACH in roles && !coachApproved) COACH_PENDING_MESSAGE else "Tu rol no permite abrir esta página"
+        )
     }
 }
 

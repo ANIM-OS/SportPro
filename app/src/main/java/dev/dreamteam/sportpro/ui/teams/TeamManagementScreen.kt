@@ -68,9 +68,11 @@ import dev.dreamteam.sportpro.data.model.TeamMember
 import dev.dreamteam.sportpro.domain.access.TeamAccess
 
 @Composable
-fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, onBack: () -> Unit, onEmailInvite: () -> Unit, onOpenTeam: (Team) -> Unit = {}) {
+fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, canUseCoachTools: Boolean, onBack: () -> Unit, onEmailInvite: () -> Unit, onOpenTeam: (Team) -> Unit = {}) {
     val state by viewModel.uiState.collectAsState()
     val owner = TeamAccess.canManage(team, userId)
+    // Invitar, QR y alineaciones exigen aprobación; editar el equipo y su plantilla, no.
+    val approvedOwner = owner && canUseCoachTools
     var tab by remember(team.id) { mutableStateOf(0) }
     var category by remember(team.id) { mutableStateOf(team.categories.firstOrNull().orEmpty()) }
     var editingMember by remember { mutableStateOf<TeamMember?>(null) }
@@ -95,7 +97,9 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
 
     LaunchedEffect(team.id) {
         viewModel.openTeam(team)
-        if (owner && state.joinCode == null) {
+    }
+    LaunchedEffect(team.id, approvedOwner) {
+        if (approvedOwner && state.joinCode == null) {
             viewModel.loadOrCreateJoinCode(team)
         }
     }
@@ -208,7 +212,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
                 }
             }
         }
-        if (owner) {
+        if (approvedOwner) {
             Spacer(Modifier.height(10.dp))
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -219,7 +223,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
                             val code = state.joinCode!!
                             QrImage("sportpro://join/${code.id}")
                             Text("${code.teamName} · ${code.categories.joinToString(" · ")}", textAlign = TextAlign.Center)
-                            Text("Código QR estático del equipo.",
+                            Text("QR válido hasta su vencimiento; los jugadores solicitan ingreso y tú decides si aprobarlo.",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                         }
                         state.managementBusy -> CircularProgressIndicator()
@@ -244,9 +248,27 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
             }
         }
         state.managementError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        state.managementMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         if (state.membersLoading) CircularProgressIndicator()
         if (tab == 0) {
-            if (owner) {
+            if (owner && state.joinRequests.isNotEmpty()) {
+                Text("Solicitudes de ingreso", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                state.joinRequests.forEach { request ->
+                    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text("${request.playerName} · ${request.category}")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(enabled = !state.managementBusy,
+                                    onClick = { viewModel.resolveJoinRequest(team, request, true) }) { Text("Aprobar") }
+                                TextButton(enabled = !state.managementBusy,
+                                    onClick = { viewModel.resolveJoinRequest(team, request, false) }) { Text("Rechazar") }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+            if (approvedOwner) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onEmailInvite) { Text("Invitar por correo") }
                 }
@@ -277,15 +299,15 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
             Text("FORMACIÓN BASE", style = MaterialTheme.typography.labelMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("4-3-3", "4-4-2", "3-5-2").forEach { item ->
-                    FilterChip(selected = formation == item, onClick = { if (owner) { formation = item; positions = emptyMap() } },
+                    FilterChip(selected = formation == item, onClick = { if (approvedOwner) { formation = item; positions = emptyMap() } },
                         label = { Text(item) })
                 }
             }
-            Text(if (owner) "Toca una posición para asignar un jugador" else "Alineación guardada", style = MaterialTheme.typography.bodySmall)
+            Text(if (approvedOwner) "Toca una posición para asignar un jugador" else "Alineación guardada", style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(10.dp))
-            Pitch(formation, positions, state.members, owner) { selectedSlot = it }
+            LineupPitch(formation, positions, state.members, approvedOwner) { selectedSlot = it }
             Spacer(Modifier.height(12.dp))
-            if (owner) Button(onClick = { viewModel.saveLineup(team, TeamLineup(category, formation, positions)) },
+            if (approvedOwner) Button(onClick = { viewModel.saveLineup(team, TeamLineup(category, formation, positions)) },
                 enabled = !state.managementBusy && !state.lineupLoading && category.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
                 Text("Guardar alineación")
             }
@@ -311,40 +333,6 @@ private fun MemberDialog(team: Team, member: TeamMember, busy: Boolean, error: S
         },
         confirmButton = { TextButton(onClick = { onSave(member.copy(playerName = name, category = category, jerseyNumber = jersey.toIntOrNull())) }, enabled = !busy) { Text("Guardar") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } })
-}
-
-private fun formationSlots(formation: String): List<Triple<Float, Float, String>> {
-    val parts = formation.split('-').map(String::toInt)
-    val rows = listOf(parts[2] to 0.18f, parts[1] to 0.43f, parts[0] to 0.72f, 1 to 0.90f)
-    val names = listOf("DEL", "MED", "DEF", "POR")
-    return rows.flatMapIndexed { rowIndex, (count, y) ->
-        (0 until count).map { i -> Triple((i + 1f) / (count + 1f), y, names[rowIndex]) }
-    }
-}
-
-@Composable
-private fun Pitch(formation: String, positions: Map<String, String>, members: List<TeamMember>, owner: Boolean, onSlot: (Int) -> Unit) {
-    BoxWithConstraints(Modifier.fillMaxWidth().height(450.dp).background(Color(0xFF174735), RoundedCornerShape(16.dp))
-        .border(BorderStroke(2.dp, Color(0xFF679983)), RoundedCornerShape(16.dp))) {
-        Canvas(Modifier.fillMaxSize().padding(14.dp)) {
-            val line = Color.White.copy(alpha = 0.45f)
-            drawLine(line,
-                Offset(0f, size.height / 2), androidx.compose.ui.geometry.Offset(size.width, size.height / 2), 2f)
-            drawCircle(line, radius = size.width * .10f, center = center, style = Stroke(2f))
-            drawRect(line, style = Stroke(2f))
-        }
-        formationSlots(formation).forEachIndexed { index, (x, y, role) ->
-            val member = members.firstOrNull { it.userId == positions["P$index"] }
-            Surface(onClick = { if (owner) onSlot(index) },
-                modifier = Modifier.offset(x = maxWidth * x - 30.dp, y = maxHeight * y - 30.dp).size(60.dp),
-                shape = CircleShape, color = Color(0xFF10362B), border = BorderStroke(2.dp, Color.White.copy(alpha = .75f))) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Text(member?.jerseyNumber?.let { "#$it" } ?: if (owner) "+" else "·", color = Color.White, fontWeight = FontWeight.Bold)
-                    Text(member?.playerName?.take(8) ?: role, color = Color.White, fontSize = 9.sp, maxLines = 1)
-                }
-            }
-        }
-    }
 }
 
 @Composable

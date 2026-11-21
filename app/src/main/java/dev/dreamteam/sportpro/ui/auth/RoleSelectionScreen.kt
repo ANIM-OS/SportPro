@@ -20,19 +20,14 @@ fun RoleSelectionScreen(
     userEmail: String,
     userName: String = "Usuario SportPro",
     onEnterClick: (Set<String>) -> Unit,
-    initialRoles: Set<String> = setOf("JUGADOR"),
+    initialRoles: Set<String> = emptySet(),
+    isGoogleAccount: Boolean = false,
     isLoading: Boolean = false,
     onCancelClick: () -> Unit,
     isDarkTheme: Boolean = true,
     onToggleTheme: () -> Unit = {}
 ) {
-    var selectedRoles by remember(initialRoles) { mutableStateOf(initialRoles.ifEmpty { setOf("JUGADOR") }) }
-
-    val roles = listOf(
-        "JUGADOR" to Color(0xFFFF6600),
-        "ENTRENADOR" to Color(0xFFFFCC00),
-        "PADRE / TUTOR" to Color(0xFF00C853)
-    )
+    var selectedRoles by remember(initialRoles) { mutableStateOf(initialRoles) }
 
     Box(
         modifier = Modifier
@@ -117,10 +112,12 @@ fun RoleSelectionScreen(
             ) {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = " G ", color = Color(0xFF4285F4), fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.width(8.dp))
+                        if (isGoogleAccount) {
+                            Text(text = " G ", color = Color(0xFF4285F4), fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
                         Text(
-                            text = "Datos recibidos de Google",
+                            text = if (isGoogleAccount) "Datos recibidos de Google" else "Datos de tu cuenta",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp
                         )
@@ -156,39 +153,16 @@ fun RoleSelectionScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Role Buttons
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                roles.forEach { (roleName, roleColor) ->
-                    val isSelected = selectedRoles.contains(roleName)
-                    OutlinedButton(
-                        onClick = {
-                            selectedRoles = if (isSelected) {
-                                if (selectedRoles.size > 1) selectedRoles - roleName else selectedRoles
-                            } else {
-                                selectedRoles + roleName
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(if (isSelected) 2.dp else 1.dp, if (isSelected) roleColor else MaterialTheme.colorScheme.surfaceVariant),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = if (isSelected) roleColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface
-                        )
-                    ) {
-                        Text(
-                            text = roleName,
-                            color = if (isSelected) roleColor else MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
+            RoleOptions(
+                selectedRoles = selectedRoles,
+                onToggleRole = { roleName ->
+                    selectedRoles = if (roleName in selectedRoles) {
+                        if (selectedRoles.size > 1) selectedRoles - roleName else selectedRoles
+                    } else {
+                        selectedRoles + roleName
                     }
                 }
-            }
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -208,7 +182,7 @@ fun RoleSelectionScreen(
                     .height(50.dp),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                enabled = !isLoading
+                enabled = !isLoading && selectedRoles.isNotEmpty()
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
@@ -232,6 +206,54 @@ fun RoleSelectionScreen(
                     modifier = Modifier.clickable(enabled = !isLoading) { onCancelClick() }
                 )
             }
+        }
+    }
+}
+
+/** Role buttons shared by registration and role selection. */
+@Composable
+internal fun RoleOptions(
+    selectedRoles: Set<String>,
+    onToggleRole: (String) -> Unit
+) {
+    val roles = listOf(
+        "JUGADOR" to Color(0xFFFF6600),
+        "ENTRENADOR" to Color(0xFFFFCC00),
+        "PADRE / TUTOR" to Color(0xFF00C853)
+    )
+
+    // Role Buttons
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        roles.forEach { (roleName, roleColor) ->
+            val isSelected = selectedRoles.contains(roleName)
+            OutlinedButton(
+                onClick = { onToggleRole(roleName) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(if (isSelected) 2.dp else 1.dp, if (isSelected) roleColor else MaterialTheme.colorScheme.surfaceVariant),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = if (isSelected) roleColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface
+                )
+            ) {
+                Text(
+                    text = roleName,
+                    color = if (isSelected) roleColor else MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+            }
+        }
+        if ("ENTRENADOR" in selectedRoles) {
+            Text(
+                text = "Los permisos de entrenador se activan cuando la administración aprueba tu rol.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp
+            )
         }
     }
 }

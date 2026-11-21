@@ -26,7 +26,7 @@ Una misma cuenta puede tener uno o varios roles dentro de SPORT PRO:
 
 Esto permite contemplar casos como un entrenador que también es jugador o un padre/tutor que también forma parte del cuerpo técnico.
 
-La aplicación combina los permisos de todos los roles de una cuenta. Actualmente, Jugador, Entrenador y Padre/Tutor pueden abrir Inicio, En vivo, Estadísticas, Comunidad y Equipos. Jugador y Entrenador pueden publicar en Comunidad; para registrar equipos o academias se requiere el rol Entrenador. Las pantallas de creación se protegen también al navegar directamente a ellas. Las páginas específicas de padres y la vinculación con sus hijos aún no están implementadas.
+La aplicación combina los permisos de todos los roles de una cuenta. Actualmente, Jugador, Entrenador y Padre/Tutor pueden abrir Inicio, En vivo, Estadísticas, Comunidad y Equipos. Jugador y Entrenador aprobado pueden publicar en Comunidad; para registrar equipos o academias se requiere el rol Entrenador aprobado. Las pantallas de creación se protegen también al navegar directamente a ellas. Las páginas específicas de padres y la vinculación con sus hijos aún no están implementadas.
 
 La pestaña Equipos solo muestra equipos creados por la cuenta o equipos a los que se unió aceptando una invitación. El entrenador creador puede invitar a otra cuenta por su correo de registro. Para recibir y aceptar invitaciones, esa cuenta debe verificar su correo; la pantalla Equipos permite enviar el enlace de verificación y actualizar su estado. Firestore comprueba los mismos permisos de lectura, creación e invitación.
 
@@ -67,9 +67,9 @@ El proyecto se encuentra actualmente en etapa de prototipo. Algunas funcionalida
 
 Próximos objetivos:
 
-* [ ] Integrar Firebase Authentication.
-* [ ] Implementar inicio de sesión con Google.
-* [ ] Implementar Firestore.
+* [x] Integrar Firebase Authentication.
+* [x] Implementar inicio de sesión con Google.
+* [x] Implementar Firestore para los módulos persistidos.
 * [ ] Completar el sistema de roles y permisos.
 * [ ] Completar la gestión de equipos y jugadores.
 * [ ] Desarrollar estadísticas.
@@ -83,7 +83,11 @@ Las variables de entorno y credenciales privadas deberán mantenerse fuera del c
 
 Para habilitar la moderación de comunidad, un administrador del proyecto debe crear en Firestore el documento `moderators/{uid}` para la cuenta designada. La aplicación solo permite a esa cuenta ocultar publicaciones; los usuarios no pueden crear documentos de moderadores mediante las reglas de Firestore. Tras asignar el permiso, el moderador debe volver a abrir la pantalla de Comunidad.
 
-La configuración actual de Firestore permite registrar equipos a las cuentas con el rol `ENTRENADOR`; no exige un documento de aprobación adicional. Los propietarios de equipos existentes conservan la administración de sus equipos.
+Para designar un administrador, crea en Firestore el documento `admins/{uid}` desde la consola de Firebase. Un administrador puede ocultar publicaciones igual que un moderador; no se guarda en `roles` porque cada usuario puede editar ese campo, y no lo convierte en entrenador aprobado.
+
+Cualquier usuario puede elegir el rol `ENTRENADOR`, pero crear equipos, invitar jugadores, generar códigos de unión, editar alineaciones y publicar como entrenador exige el documento `coachApprovals/{uid}` con el campo booleano `approved` en `true`, creado desde la consola de Firebase. Las reglas de Firestore aplican esta condición; los eventos en vivo se guardan solo en la app, por lo que ahí la aprobación se comprueba únicamente en la interfaz. Para retirar la aprobación, cambia `approved` a `false` o elimina el documento.
+
+Los avisos de pruebas y convocatorias (US-20) están en la pestaña Convocatorias de Comunidad y se guardan en la colección `tryoutNotices`. Solo un entrenador aprobado puede publicarlos; título y descripción son obligatorios. Un aviso vence al terminar el día de su fecha límite y, sin fecha límite, sigue vigente hasta que se cancela. Vigente o vencido se calcula en la app con la hora del dispositivo, porque el plan Spark no permite Cloud Functions. Solo el autor o un administrador pueden cancelar un aviso; los avisos no se eliminan. Los propietarios de equipos sin aprobación conservan la edición y eliminación de sus equipos y la gestión de sus miembros.
 
 ## Licencia
 
@@ -94,3 +98,105 @@ Copyright © 2026 SPORT PRO. Todos los derechos reservados.
 El código fuente, diseño y documentación del proyecto no pueden ser copiados, modificados, distribuidos o utilizados con fines comerciales sin autorización de sus autores.
 
 Actualmente el proyecto no se encuentra abierto a contribuciones externas.
+
+## US-09 y US-10 en SportPro
+
+Convocatorias, disponibilidad y alineaciones por partido se abren desde
+**Equipos → Convocatorias por partido** en la app SportPro habitual.
+En Android Studio selecciona la variante **debug** y ejecuta la app. No existe
+una variante ni una aplicación separada «SportPro Local».
+La app usa la configuración existente de `app/google-services.json` y las cuentas,
+equipos y jugadores del Firebase compartido; no se copian datos de los emuladores.
+
+El entrenador selecciona equipo y partido, marca jugadores de la categoría y guarda.
+Puede registrar el partido y ajustar la fecha límite sugerida para las respuestas.
+El jugador o tutor autorizado confirma su disponibilidad antes de ese límite.
+Para llegar a la plantilla con QR, el jugador envía una solicitud en
+`teamJoinRequests`; el entrenador la aprueba y la membresía se crea en la misma
+operación. El QR puede recibir varias solicitudes hasta vencer. Los jugadores
+pueden cancelar solicitudes pendientes y el dueño limpia las solicitudes al
+eliminar su equipo.
+Para autorizar a un tutor, el jugador genera un código de 30 minutos en su perfil,
+el tutor lo acepta en **Equipos → Convocatorias por partido** y el jugador confirma
+la solicitud. El vínculo activo se guarda en `guardianLinks` y se puede revocar.
+Los vínculos antiguos de `playerGuardians` siguen visibles para que sus usuarios
+sepan que deben repetir la confirmación; ya no conceden acceso a los datos del jugador.
+
+Las reglas de US-09, US-10 y US-11 se comprobaron. El 21 de noviembre de 2026
+se sincronizó `firestore.rules` con las reglas publicadas por el equipo en
+`sportpro-6f6ad` y se publicó el permiso para cancelar y limpiar solicitudes de
+ingreso; después se verificó que el archivo coincide con producción. Incluye el
+flujo actual de `guardianInvites` y `guardianLinks` y conserva los cambios de
+reglas hechos por otros integrantes.
+Antes de cambiarlas de nuevo, compara la versión publicada con el repositorio.
+La pestaña **Partidos** y
+**Equipos → Convocatorias por partido** leen los mismos documentos `matchFixtures`.
+El marcador y los eventos todavía no tienen persistencia; la app no muestra
+marcadores ni cronologías ficticias como si fueran reales.
+
+Los partidos se guardan en `matchFixtures`; cada selección, en `matchCallupPlayers`,
+con identidad estable de partido y jugador. El rival se introduce únicamente al registrar
+el partido; en la convocatoria todos los datos se seleccionan o se muestran automáticamente.
+La categoría de un partido guardado es inmutable para no invalidar las convocatorias existentes.
+Las escrituras validan propiedad del equipo, rol, membresía, categoría y fecha futura.
+La retirada se conserva como estado visible para el jugador. Las actualizaciones usan listeners.
+Los cambios de una convocatoria se guardan en una sola transacción: si una
+selección falla, ninguna de esa edición se aplica. Para respetar el límite de
+lecturas de las reglas de Firestore, se pueden guardar hasta 15 altas o 5
+retiros por vez; después se continúa con el resto. Cambiar la categoría de un
+jugador o retirarlo del equipo requiere quitarlo antes de sus convocatorias futuras.
+Al eliminar un equipo, la app elimina también sus partidos, convocatorias,
+respuestas de disponibilidad y alineaciones por partido.
+Los borradores antiguos del dispositivo no se migran ni se eliminan.
+
+Las reglas de estas historias están incluidas en `firestore.rules`. Los módulos
+de eventos US-12 a US-15 todavía requieren su propia integración de datos.
+
+
+## US-11: alineación por partido
+
+Depende de las convocatorias de US-09. US-10 aporta el estado de disponibilidad como
+referencia: no responder no excluye al jugador y no se impide al entrenador alinear
+un convocado que marcó «No disponible», porque esa restricción no forma parte de US-11.
+Las pruebas locales cubren las respuestas del jugador y del tutor verificado y vinculado,
+la revocación del vínculo, el cierre del plazo y la consulta del entrenador.
+
+En **Equipos → Convocatorias**, selecciona un equipo y un partido y abre **Alineación del
+partido**. Guarda o descarta primero cualquier cambio pendiente en la convocatoria.
+Toca una casilla para elegir un titular; usa **Agregar suplente** para el banco. Cada
+jugador tiene una sola asignación y se puede mover entre titular y suplente mediante
+**Editar**. **Guardar asignación** persiste el cambio inmediatamente; **Retirar** libera
+su lugar. Una posición ocupada debe liberarse antes de colocar otro jugador.
+La disponibilidad aparece junto a los nombres, incluso cuando el partido ya
+comenzó. Las alineaciones incompletas se pueden
+preparar y guardar; no se exige tener once titulares desde el primer guardado.
+
+La cancha y las formaciones se comparten con la alineación general del equipo. Cambiar
+la formación de un partido conserva las casillas asignadas y pide confirmar que se
+adaptarán sus posiciones; no modifica la alineación general ni otro encuentro.
+Los jugadores del equipo pueden consultar la alineación desde su convocatoria.
+Solo el propietario aprobado puede editarla, y solamente antes del inicio del partido.
+
+La colección nueva es `matchLineups`, con un documento por partido y subcolecciones
+`players` (una asignación por jugador) y `slots` (reserva exclusiva de cada casilla titular).
+Los cambios de posición y condición se guardan en transacciones; las reglas exigen
+convocatoria activa, categoría correcta, propiedad, aprobación y ausencia de duplicados.
+Retirar a un jugador de la convocatoria también retira su asignación en la misma
+transacción. Si cambia su categoría o membresía desde otro módulo, la pantalla avisa
+que su asignación ya no es válida y permite retirarla; no altera ese otro módulo.
+
+## Pruebas aisladas de Firebase
+
+Los emuladores se conservan únicamente para las pruebas automatizadas de reglas;
+no son una variante de la aplicación ni se necesitan para abrir SportPro.
+
+1. Ejecuta `scripts/start-callups-local.command` y mantén la ventana abierta.
+2. Ejecuta `scripts/prepare-callups-local.command` para correr la suite.
+
+`tests/callups/lineup-check.mjs` encadena las comprobaciones de US-09, US-10 y US-11,
+incluido el recorrido QR → membresía → convocatoria → respuesta con reglas reales
+en el emulador local. También cubre autorizaciones, persistencia, fechas límite, alineaciones independientes,
+escrituras simultáneas y conservación de la alineación general.
+Solo utiliza `demo-sportpro` en localhost; sus cuentas y datos ficticios no funcionan
+en SportPro ni se migran al Firebase compartido. La interfaz de los datos de prueba
+está en http://127.0.0.1:4000/firestore. No ejecutar `firebase deploy` para estas pruebas.

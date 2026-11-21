@@ -13,6 +13,9 @@ data class CommunityUiState(
     val posts: List<CommunityPost> = emptyList(),
     val isLoading: Boolean = true,
     val isPublishing: Boolean = false,
+    // Separado de errorMessage: ese reemplaza la lista de publicaciones.
+    val publishError: String? = null,
+    val scrollToTopRequested: Boolean = false,
     val errorMessage: String? = null,
     val canModerate: Boolean = false,
     val postTargets: List<CommunityTeamTarget> = emptyList(),
@@ -35,10 +38,7 @@ class CommunityViewModel : ViewModel() {
 
     init {
         loadPosts()
-        repository.loadPostTargets(
-            onResult = { targets -> _uiState.value = _uiState.value.copy(postTargets = targets, postTargetsError = null) },
-            onError = { message -> _uiState.value = _uiState.value.copy(postTargetsError = message) }
-        )
+        loadPostTargets()
         repository.checkModerator(
             onResult = { allowed -> _uiState.value = _uiState.value.copy(canModerate = allowed) },
             onError = { _uiState.value = _uiState.value.copy(canModerate = false) }
@@ -69,23 +69,39 @@ class CommunityViewModel : ViewModel() {
         )
     }
 
+    private fun loadPostTargets() {
+        repository.loadPostTargets(
+            onResult = { targets -> _uiState.value = _uiState.value.copy(postTargets = targets, postTargetsError = null) },
+            onError = { message -> _uiState.value = _uiState.value.copy(postTargetsError = message) }
+        )
+    }
+
+    // El ViewModel se comparte con Comunidad, así que cada formulario nuevo
+    // recarga los equipos disponibles y descarta el error anterior.
+    fun prepareNewPost() {
+        _uiState.value = _uiState.value.copy(publishError = null)
+        loadPostTargets()
+    }
+
     fun createPost(
         content: String,
         visibility: String,
         teamId: String?,
         onSuccess: () -> Unit
     ) {
+        // El botón se deshabilita al recomponer; dos toques seguidos pueden llegar antes.
+        if (_uiState.value.isPublishing) return
 
         if (content.isBlank()) {
             _uiState.value = _uiState.value.copy(
-                errorMessage = "Escribe algo antes de publicar"
+                publishError = "Escribe algo antes de publicar"
             )
             return
         }
 
         _uiState.value = _uiState.value.copy(
             isPublishing = true,
-            errorMessage = null
+            publishError = null
         )
 
         repository.createPost(
@@ -96,7 +112,8 @@ class CommunityViewModel : ViewModel() {
             onSuccess = {
 
                 _uiState.value = _uiState.value.copy(
-                    isPublishing = false
+                    isPublishing = false,
+                    scrollToTopRequested = true
                 )
 
                 onSuccess()
@@ -106,10 +123,14 @@ class CommunityViewModel : ViewModel() {
 
                 _uiState.value = _uiState.value.copy(
                     isPublishing = false,
-                    errorMessage = message
+                    publishError = message
                 )
             }
         )
+    }
+
+    fun onScrolledToTop() {
+        _uiState.value = _uiState.value.copy(scrollToTopRequested = false)
     }
 
     fun clearError() {

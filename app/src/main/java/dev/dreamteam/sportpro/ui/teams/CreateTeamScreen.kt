@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import dev.dreamteam.sportpro.domain.SportCatalog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,9 +40,7 @@ fun CreateTeamScreen(
     var city by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var photoUri by remember { mutableStateOf<Uri?>(null) }
-    val availableCategories = listOf(
-        "SUB-10", "SUB-12", "SUB-15", "SUB-17", "PRIMERA", "FEMENIL-SUB-15", "FEMENIL-SUB-17"
-    )
+    val availableCategories = SportCatalog.CATEGORIES
     var selectedCategories by remember { mutableStateOf(setOf("SUB-15", "SUB-17")) }
 
     val photoPicker = rememberLauncherForActivityResult(
