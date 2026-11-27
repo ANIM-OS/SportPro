@@ -225,6 +225,7 @@ class MainActivity : ComponentActivity() {
                                 .any { it.providerId == GoogleAuthProvider.PROVIDER_ID },
                             isLoading = isLoading,
                             isEditing = editingRoles,
+                            coachApproved = coachApproved,
                             onCancelClick = {
                                 if (editingRoles) {
                                     editingRoles = false

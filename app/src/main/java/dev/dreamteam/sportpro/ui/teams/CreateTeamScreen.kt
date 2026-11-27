@@ -34,6 +34,8 @@ fun CreateTeamScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    // El ViewModel se comparte con Equipos: no arrastrar el error de un intento anterior.
+    LaunchedEffect(Unit) { viewModel.clearCreateError() }
 
     var selectedType by remember { mutableStateOf("EQUIPO") }
     var teamName by remember { mutableStateOf("") }
@@ -41,7 +43,7 @@ fun CreateTeamScreen(
     var description by remember { mutableStateOf("") }
     var photoUri by remember { mutableStateOf<Uri?>(null) }
     val availableCategories = SportCatalog.CATEGORIES
-    var selectedCategories by remember { mutableStateOf(setOf("SUB-15", "SUB-17")) }
+    var selectedCategories by remember { mutableStateOf(emptySet<String>()) }
 
     val photoPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
@@ -201,11 +203,8 @@ fun CreateTeamScreen(
                             val isSelected = selectedCategories.contains(category)
                             Surface(
                                 onClick = {
-                                    selectedCategories = if (isSelected) {
-                                        if (selectedCategories.size > 1) selectedCategories - category else selectedCategories
-                                    } else {
-                                        selectedCategories + category
-                                    }
+                                    selectedCategories = if (isSelected) selectedCategories - category
+                                    else selectedCategories + category
                                 },
                                 modifier = Modifier
                                     .weight(1f)
@@ -252,6 +251,15 @@ fun CreateTeamScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
+            if (selectedCategories.isEmpty()) {
+                Text(
+                    text = "Elige al menos una categoría",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             // Buttons at the bottom of the scrollable content
             Button(
                 onClick = {
@@ -270,7 +278,7 @@ fun CreateTeamScreen(
                     .height(50.dp),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                enabled = canCreateTeam && !uiState.isCreating
+                enabled = canCreateTeam && !uiState.isCreating && selectedCategories.isNotEmpty()
             ) {
                 if (uiState.isCreating) {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))

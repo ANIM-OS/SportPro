@@ -821,10 +821,17 @@ class TeamsViewModel : ViewModel() {
             return
         }
         val teamRef = firestore.collection("teams").document()
-        teamRef.set(teamData).addOnSuccessListener {
-            _uiState.update { it.copy(isCreating = false) }
-            onSuccess(teamRef.id)
-        }.addOnFailureListener(::reportCreateError)
+        // set() solo termina cuando el servidor confirma; con mala conexión o una foto pesada
+        // eso tarda y la pantalla se quedaba cargando. La escritura ya se aplica en local y la
+        // lista de equipos la muestra, así que se vuelve enseguida. Si el servidor la rechaza,
+        // Firestore la deshace y el error se muestra en Equipos.
+        teamRef.set(teamData).addOnFailureListener(::reportCreateError)
+        _uiState.update { it.copy(isCreating = false) }
+        onSuccess(teamRef.id)
+    }
+
+    fun clearCreateError() {
+        _uiState.update { it.copy(createError = null) }
     }
 
     private fun compactTeamPhoto(context: Context, uri: Uri): String {
@@ -861,7 +868,8 @@ class TeamsViewModel : ViewModel() {
         val message = if ((error as? FirebaseFirestoreException)?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED)
             "Firestore rechazó los datos del equipo. Comprueba las reglas publicadas."
         else error.localizedMessage ?: "No se pudo crear el equipo"
-        _uiState.update { it.copy(isCreating = false, createError = message) }
+        // El formulario ya se cerró: el aviso va a la pantalla Equipos.
+        _uiState.update { it.copy(isCreating = false, teamActionError = "No se pudo crear el equipo: $message") }
     }
 
     fun invitePlayer(team: Team, email: String, category: String, onSuccess: () -> Unit) {

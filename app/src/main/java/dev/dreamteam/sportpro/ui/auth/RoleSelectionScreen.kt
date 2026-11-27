@@ -25,6 +25,8 @@ fun RoleSelectionScreen(
     isLoading: Boolean = false,
     // true al entrar desde "Roles" con la cuenta ya completa; false al terminar el registro.
     isEditing: Boolean = false,
+    // null mientras se consulta coachApprovals.
+    coachApproved: Boolean? = false,
     onCancelClick: () -> Unit,
     isDarkTheme: Boolean = true,
     onToggleTheme: () -> Unit = {}
@@ -158,6 +160,7 @@ fun RoleSelectionScreen(
 
             RoleOptions(
                 selectedRoles = selectedRoles,
+                coachApproved = coachApproved,
                 onToggleRole = { roleName ->
                     selectedRoles = if (roleName in selectedRoles) {
                         if (selectedRoles.size > 1) selectedRoles - roleName else selectedRoles
@@ -226,6 +229,7 @@ fun RoleSelectionScreen(
 @Composable
 internal fun RoleOptions(
     selectedRoles: Set<String>,
+    coachApproved: Boolean? = false,
     onToggleRole: (String) -> Unit
 ) {
     val roles = listOf(
@@ -260,7 +264,14 @@ internal fun RoleOptions(
                 )
             }
         }
-        if ("ENTRENADOR" in selectedRoles) {
+        // Sin texto mientras coachApproved es null, para no mostrar "pendiente" a una entrenadora aprobada.
+        if ("ENTRENADOR" in selectedRoles && coachApproved == true) {
+            Text(
+                text = "Tu rol de entrenador está aprobado.",
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 12.sp
+            )
+        } else if ("ENTRENADOR" in selectedRoles && coachApproved == false) {
             Text(
                 text = "Los permisos de entrenador se activan cuando la administración aprueba tu rol.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
