@@ -78,6 +78,7 @@ import dev.dreamteam.sportpro.domain.access.COACH_PENDING_MESSAGE
 import dev.dreamteam.sportpro.ui.events.RegisterEventScreen
 import dev.dreamteam.sportpro.ui.teams.TeamsScreen
 import dev.dreamteam.sportpro.ui.teams.CreateTeamScreen
+import dev.dreamteam.sportpro.ui.teams.TeamsViewModel
 import dev.dreamteam.sportpro.ui.live.LiveMatchScreen
 import dev.dreamteam.sportpro.ui.statistics.StatisticsScreen
 
@@ -478,9 +479,16 @@ fun SportProNavGraph(
                 TrainingNavHost(roles = roles, isCoachApproved = isCoachApproved)
             }
 
-            composable(SportProRoute.CreateTeam.route) {
+            composable(SportProRoute.CreateTeam.route) { entry ->
+                // Mismo TeamsViewModel que la pantalla Equipos: la creación sigue viva al volver
+                // y, si el servidor la rechaza después, el error se ve en Equipos.
+                val teamsEntry = remember(entry) {
+                    runCatching { navController.getBackStackEntry(SportProRoute.Teams.route) }.getOrNull()
+                }
+                val teamsViewModel: TeamsViewModel = if (teamsEntry != null) viewModel(teamsEntry) else viewModel()
                 RoleGate(roles, RoleCapability.CREATE_TEAM, isCoachApproved) {
                     CreateTeamScreen(
+                        viewModel = teamsViewModel,
                         canCreateTeam = RoleAccess.can(roles, RoleCapability.CREATE_TEAM, isCoachApproved),
                         onBack = {
                             navController.popBackStack()

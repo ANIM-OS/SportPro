@@ -496,6 +496,10 @@ service cloud.firestore {
         && request.resource.data.categories.size() > 0
         && validTeamDetails()
         && validAcademyLink()
+        // US-03 criterio 3: las reglas no pueden revisar los equipos vinculados, así que una
+        // ACADEMIA solo puede añadir categorías; quitar una dejaría equipos inconsistentes.
+        && (resource.data.type != 'ACADEMIA'
+          || request.resource.data.categories.hasAll(resource.data.categories))
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['photoUpdatedAt'])
           || request.resource.data.photoUpdatedAt == request.time);
       allow delete: if request.auth != null
