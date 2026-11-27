@@ -36,5 +36,15 @@ data class TrainingSession(
 
     companion object {
         const val ALL_CATEGORIES = "TODAS"
+
+        /** firestore.rules comprueba cada ejercicio por posición, así que el máximo es fijo. */
+        const val MAX_EXERCISES = 20
+
+        /**
+         * Categorías de sesión que ve un miembro de la categoría indicada: las de TODAS y las de la suya.
+         * Las reglas solo permiten consultar con una categoría concreta, así que se hace una consulta por cada una.
+         */
+        fun visibleCategories(memberCategory: String): List<String> =
+            listOf(ALL_CATEGORIES) + listOfNotNull(memberCategory.takeIf { it.isNotBlank() && it != ALL_CATEGORIES })
     }
 }

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.FamilyRestroom
@@ -15,6 +16,11 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -26,7 +32,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.google.firebase.auth.FirebaseAuth
 import dev.dreamteam.sportpro.domain.access.COACH_PENDING_MESSAGE
+import dev.dreamteam.sportpro.data.repository.MonthlyFeeRepository
 import dev.dreamteam.sportpro.ui.auth.AppRole
+import dev.dreamteam.sportpro.ui.players.AdminFeesScreen
 import dev.dreamteam.sportpro.ui.players.MonthlyFeesScreen
 import dev.dreamteam.sportpro.ui.players.PlayerFeesScreen
 import dev.dreamteam.sportpro.ui.players.PlayerProfileScreen
@@ -41,17 +49,23 @@ private object TrainingRoutes {
     const val SESSION_DETAIL = "training_session/{sessionId}"
     const val ATTENDANCE = "training_attendance/{playerId}"
     const val PLAYERS = "training_players"
-    const val PLAYER_PROFILE = "training_player/{playerId}?name={name}"
+    // teamId: equipo por el que entra la entrenadora (vacío para el jugador y el tutor).
+    const val PLAYER_PROFILE = "training_player/{playerId}?name={name}&teamId={teamId}"
     const val FEES = "training_fees"
     const val PLAYER_FEES = "training_player_fees/{playerId}"
+    const val ADMIN_FEES = "training_admin_fees"
+    const val ADMIN_SESSIONS = "training_admin_sessions"
+    const val GUARDIAN_SESSIONS = "training_guardian_sessions/{playerId}"
 
     fun sessionForm(sessionId: String? = null) =
         if (sessionId == null) "training_session_form" else "training_session_form?sessionId=$sessionId"
 
     fun sessionDetail(sessionId: String) = "training_session/$sessionId"
     fun attendance(playerId: String) = "training_attendance/$playerId"
-    fun playerProfile(playerId: String, name: String = "") = "training_player/$playerId?name=${Uri.encode(name)}"
+    fun playerProfile(playerId: String, name: String = "", teamId: String? = null) =
+        "training_player/$playerId?name=${Uri.encode(name)}&teamId=${Uri.encode(teamId.orEmpty())}"
     fun playerFees(playerId: String) = "training_player_fees/$playerId"
+    fun guardianSessions(playerId: String) = "training_guardian_sessions/$playerId"
 }
 
 /**
@@ -67,6 +81,9 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
     val coachPending = AppRole.COACH in roles && !isCoachApproved
     val isPlayer = AppRole.PLAYER in roles
     val isParent = AppRole.PARENT in roles
+    // Admin = existe admins/{uid}; no es un rol elegible. Solo habilita la consulta de mensualidades.
+    var isAdmin by remember(uid) { mutableStateOf(false) }
+    LaunchedEffect(uid) { MonthlyFeeRepository().checkAdmin { isAdmin = it } }
 
     // Otra persona viendo el historial de un jugador: el entrenador solo lee lo que él registró.
     fun viewsAsCoach(playerId: String) = playerId != uid && isCoach
@@ -78,6 +95,7 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
                 coachPending = coachPending,
                 isPlayer = isPlayer,
                 isParent = isParent,
+                isAdmin = isAdmin,
                 onNavigate = { route -> navController.navigate(route) },
                 ownPlayerRoutes = OwnPlayerRoutes(
                     profile = TrainingRoutes.playerProfile(uid),
@@ -134,30 +152,57 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
                 isCoach = isCoach,
                 isParent = isParent,
                 onBack = { navController.popBackStack() },
-                onOpenPlayer = { id, name -> navController.navigate(TrainingRoutes.playerProfile(id, name)) }
+                onOpenPlayer = { id, name, teamId -> navController.navigate(TrainingRoutes.playerProfile(id, name, teamId)) }
             )
         }
         composable(
             route = TrainingRoutes.PLAYER_PROFILE,
-            arguments = listOf(navArgument("name") {
-                type = NavType.StringType
-                defaultValue = ""
-            })
+            arguments = listOf(
+                navArgument("name") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument("teamId") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                }
+            )
         ) { entry ->
             val playerId = entry.arguments?.getString("playerId").orEmpty()
+            val coachTeamId = entry.arguments?.getString("teamId")?.takeIf { it.isNotBlank() && isCoach }
             PlayerProfileScreen(
                 playerId = playerId,
                 initialName = entry.arguments?.getString("name").orEmpty(),
-                // El propio jugador y los entrenadores mantienen el perfil; el padre o tutor solo consulta.
-                canEdit = playerId == uid || isCoach,
                 isSelf = playerId == uid,
+                // Solo llega con teamId desde la plantilla de un equipo de la entrenadora.
+                coachTeamId = coachTeamId,
                 onBack = { navController.popBackStack() },
                 onOpenAttendance = { navController.navigate(TrainingRoutes.attendance(playerId)) },
-                onOpenFees = { navController.navigate(TrainingRoutes.playerFees(playerId)) }
+                onOpenFees = { navController.navigate(TrainingRoutes.playerFees(playerId)) },
+                // Tutor que abre a su jugador desde "Jugadores a mi cargo" (sin equipo de entrenadora).
+                onOpenSessions = if (isParent && playerId != uid && coachTeamId == null) {
+                    { navController.navigate(TrainingRoutes.guardianSessions(playerId)) }
+                } else null
             )
         }
         composable(TrainingRoutes.FEES) {
             MonthlyFeesScreen(onBack = { navController.popBackStack() })
+        }
+        composable(TrainingRoutes.ADMIN_FEES) {
+            AdminFeesScreen(onBack = { navController.popBackStack() })
+        }
+        composable(TrainingRoutes.ADMIN_SESSIONS) {
+            AdminSessionsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenSession = { id -> navController.navigate(TrainingRoutes.sessionDetail(id)) }
+            )
+        }
+        composable(TrainingRoutes.GUARDIAN_SESSIONS) { entry ->
+            GuardianSessionsScreen(
+                playerId = entry.arguments?.getString("playerId").orEmpty(),
+                onBack = { navController.popBackStack() },
+                onOpenSession = { id -> navController.navigate(TrainingRoutes.sessionDetail(id)) }
+            )
         }
         composable(TrainingRoutes.PLAYER_FEES) { entry ->
             val playerId = entry.arguments?.getString("playerId").orEmpty()
@@ -179,6 +224,7 @@ private fun TrainingHub(
     coachPending: Boolean,
     isPlayer: Boolean,
     isParent: Boolean,
+    isAdmin: Boolean,
     onNavigate: (String) -> Unit,
     ownPlayerRoutes: OwnPlayerRoutes
 ) {
@@ -203,7 +249,7 @@ private fun TrainingHub(
 
         if (coachPending) {
             EmptyState(COACH_PENDING_MESSAGE)
-        } else if (!isCoach && !isPlayer && !isParent) {
+        } else if (!isCoach && !isPlayer && !isParent && !isAdmin) {
             EmptyState("Tu cuenta aún no tiene roles asignados. Elígelos con el botón \"Roles\" de la barra superior.")
         }
 
@@ -275,10 +321,28 @@ private fun TrainingHub(
             SectionLabel("PADRE / TUTOR", modifier = Modifier.padding(top = 8.dp))
             ModuleCard(
                 title = "Jugadores a mi cargo",
-                description = "Perfil, asistencia y mensualidades de tus hijos o tutelados.",
-                story = "US-04 · US-05 · US-08",
+                description = "Perfil, entrenamientos, asistencia y mensualidades de tus hijos o tutelados.",
+                story = "US-04 · US-05 · US-06 · US-08",
                 icon = Icons.Default.FamilyRestroom,
                 onClick = { onNavigate(TrainingRoutes.PLAYERS) }
+            )
+        }
+
+        if (isAdmin) {
+            SectionLabel("ADMINISTRACIÓN", modifier = Modifier.padding(top = 8.dp))
+            ModuleCard(
+                title = "Mensualidades",
+                description = "Consulta de solo lectura por periodo y equipo.",
+                story = "US-05",
+                icon = Icons.Default.AdminPanelSettings,
+                onClick = { onNavigate(TrainingRoutes.ADMIN_FEES) }
+            )
+            ModuleCard(
+                title = "Sesiones de entrenamiento",
+                description = "Planificación de todos los equipos, en solo lectura.",
+                story = "US-06",
+                icon = Icons.Default.Event,
+                onClick = { onNavigate(TrainingRoutes.ADMIN_SESSIONS) }
             )
         }
     }

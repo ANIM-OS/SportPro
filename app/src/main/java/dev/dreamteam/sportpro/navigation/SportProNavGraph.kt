@@ -1,6 +1,15 @@
 package dev.dreamteam.sportpro.navigation
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -80,6 +89,7 @@ import dev.dreamteam.sportpro.ui.events.MatchesForUs13Screen
 import dev.dreamteam.sportpro.ui.events.MatchDetailUs13Screen
 import dev.dreamteam.sportpro.ui.teams.TeamsScreen
 import dev.dreamteam.sportpro.ui.teams.CreateTeamScreen
+import dev.dreamteam.sportpro.ui.teams.TeamsViewModel
 import dev.dreamteam.sportpro.ui.live.LiveMatchScreen
 import dev.dreamteam.sportpro.ui.statistics.StatisticsScreen
 
@@ -236,33 +246,48 @@ fun SportProNavGraph(
             Column {
                 TopAppBar(
                     title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "Sport",
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp
-                            )
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text(
-                                text = "Pro",
-                                color = MaterialTheme.colorScheme.onBackground,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp
-                            )
+                        // Un solo texto de dos colores: nunca se parte en dos líneas y,
+                        // si no entra, la letra baja hasta 14sp en vez de cortarse.
+                        val primary = MaterialTheme.colorScheme.primary
+                        val logo = remember(primary) {
+                            buildAnnotatedString {
+                                withStyle(SpanStyle(color = primary)) { append("Sport") }
+                                append("Pro")
+                            }
                         }
+                        BasicText(
+                            text = logo,
+                            style = TextStyle(
+                                color = MaterialTheme.colorScheme.onBackground,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            maxLines = 1,
+                            softWrap = false,
+                            autoSize = TextAutoSize.StepBased(minFontSize = 14.sp, maxFontSize = 20.sp)
+                        )
                     },
                     actions = {
+                        // En pantallas angostas (p. ej. Samsung A35) los botones se compactan
+                        // para dejar sitio al logo; cada texto sigue en una sola línea.
+                        val compact = LocalConfiguration.current.screenWidthDp < 400
+                        val actionFont = if (compact) 11.sp else 12.sp
+                        val buttonPadding = if (compact) PaddingValues(horizontal = 6.dp)
+                            else ButtonDefaults.TextButtonContentPadding
+                        val buttonMinWidth = if (compact) Modifier.defaultMinSize(minWidth = 1.dp) else Modifier
+
                         // Roles management button
                         TextButton(
                             onClick = onEditRoles,
-                            modifier = Modifier.padding(end = 4.dp)
+                            contentPadding = buttonPadding,
+                            modifier = buttonMinWidth.padding(end = if (compact) 2.dp else 4.dp)
                         ) {
                             Text(
                                 text = "Roles",
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
+                                fontSize = actionFont,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
 
@@ -272,14 +297,18 @@ fun SportProNavGraph(
                             shape = RoundedCornerShape(16.dp),
                             color = MaterialTheme.colorScheme.surface,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant),
-                            modifier = Modifier.padding(end = 4.dp)
+                            modifier = Modifier.padding(end = if (compact) 2.dp else 4.dp)
                         ) {
                             Text(
                                 text = if (isDarkTheme) "🌙 MODO OSCURO" else "☀️ MODO CLARO",
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(
+                                    horizontal = if (compact) 6.dp else 10.dp, vertical = 6.dp
+                                ),
                                 color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
+                                fontSize = if (compact) 10.sp else 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
 
@@ -287,7 +316,8 @@ fun SportProNavGraph(
                         TextButton(
                             onClick = onLogout,
                             enabled = !isLoading,
-                            modifier = Modifier.padding(end = 8.dp)
+                            contentPadding = buttonPadding,
+                            modifier = buttonMinWidth.padding(end = if (compact) 4.dp else 8.dp)
                         ) {
                             if (isLoading) {
                                 CircularProgressIndicator(
@@ -299,7 +329,9 @@ fun SportProNavGraph(
                                     text = "Cerrar sesión",
                                     color = Color(0xFFFF5252),
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
+                                    fontSize = if (compact) 11.sp else 13.sp,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }
@@ -491,9 +523,16 @@ fun SportProNavGraph(
                 TrainingNavHost(roles = roles, isCoachApproved = isCoachApproved)
             }
 
-            composable(SportProRoute.CreateTeam.route) {
+            composable(SportProRoute.CreateTeam.route) { entry ->
+                // Mismo TeamsViewModel que la pantalla Equipos: la creación sigue viva al volver
+                // y, si el servidor la rechaza después, el error se ve en Equipos.
+                val teamsEntry = remember(entry) {
+                    runCatching { navController.getBackStackEntry(SportProRoute.Teams.route) }.getOrNull()
+                }
+                val teamsViewModel: TeamsViewModel = if (teamsEntry != null) viewModel(teamsEntry) else viewModel()
                 RoleGate(roles, RoleCapability.CREATE_TEAM, isCoachApproved) {
                     CreateTeamScreen(
+                        viewModel = teamsViewModel,
                         canCreateTeam = RoleAccess.can(roles, RoleCapability.CREATE_TEAM, isCoachApproved),
                         onBack = {
                             navController.popBackStack()

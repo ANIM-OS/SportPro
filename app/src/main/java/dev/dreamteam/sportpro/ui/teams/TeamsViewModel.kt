@@ -59,10 +59,22 @@ data class TeamsUiState(
     val managementMessage: String? = null,
     val managementBusy: Boolean = false,
     val joinCode: TeamJoinCode? = null,
+    // Error del QR del propietario; separado de managementError para no mostrarlo como error de la plantilla.
+    val joinCodeError: String? = null,
     val pendingJoinCode: TeamJoinCode? = null,
     val joinRequests: List<TeamJoinRequest> = emptyList(),
-    val myJoinRequests: List<TeamJoinRequest> = emptyList()
+    val myJoinRequests: List<TeamJoinRequest> = emptyList(),
+    // Solicitud a la que corresponde el aviso "Solicitud enviada…"; al dejar de estar PENDING se quita el aviso.
+    val awaitingJoinRequestId: String? = null
 )
+
+// La regla de teamJoinCodes exige expiresAt < request.time + 1h (hora del servidor);
+// el margen evita rechazos si el reloj del móvil va adelantado.
+private const val JOIN_CODE_TTL_MS = 55 * 60 * 1000L
+private const val ACADEMY_CATEGORIES_MESSAGE = "Las categorías del equipo deben estar incluidas en la academia"
+private const val JOIN_SENT_MESSAGE = "Solicitud enviada. El entrenador debe aprobar tu ingreso."
+private const val JOIN_ALREADY_PENDING_MESSAGE = "Tu solicitud ya está pendiente de aprobación"
+private val JOIN_PENDING_MESSAGES = setOf(JOIN_SENT_MESSAGE, JOIN_ALREADY_PENDING_MESSAGE)
 
 data class TeamDetails(
     val name: String,
@@ -131,6 +143,7 @@ class TeamsViewModel : ViewModel() {
                 teams = emptyList(),
                 pendingInvites = emptyList(),
                 myJoinRequests = emptyList(),
+                awaitingJoinRequestId = null,
                 isLoading = true,
                 teamsError = null,
                 invitesError = null
@@ -168,7 +181,15 @@ class TeamsViewModel : ViewModel() {
                 if (currentGeneration != generation) return@addSnapshotListener
                 if (error != null) _uiState.update { it.copy(myJoinRequests = emptyList(),
                     managementError = error.localizedMessage ?: "No se pudieron cargar tus solicitudes de ingreso") }
-                else _uiState.update { it.copy(myJoinRequests = snapshot?.documents.orEmpty().mapNotNull(::joinRequestFromDocument)) }
+                else _uiState.update { state ->
+                    val requests = snapshot?.documents.orEmpty().mapNotNull(::joinRequestFromDocument)
+                    val awaiting = state.awaitingJoinRequestId
+                    if (awaiting != null && !TeamAccess.isJoinRequestPending(awaiting, requests)) {
+                        // Aprobada, rechazada o cancelada: el aviso de "esperando aprobación" ya no aplica.
+                        state.copy(myJoinRequests = requests, awaitingJoinRequestId = null,
+                            managementMessage = state.managementMessage.takeUnless { it in JOIN_PENDING_MESSAGES })
+                    } else state.copy(myJoinRequests = requests)
+                }
             }
 
         if (user.isEmailVerified) {
@@ -190,7 +211,8 @@ class TeamsViewModel : ViewModel() {
                             invitedEmail = doc.getString("invitedEmail") ?: "",
                             invitedBy = doc.getString("invitedBy") ?: "",
                             status = doc.getString("status") ?: "",
-                            createdAt = doc.getTimestamp("createdAt")
+                            createdAt = doc.getTimestamp("createdAt"),
+                            category = doc.getString("category") ?: ""
                         )
                     } ?: emptyList()
                     _uiState.update { it.copy(pendingInvites = invites, invitesError = null) }
@@ -266,6 +288,10 @@ class TeamsViewModel : ViewModel() {
                 _uiState.update { it.copy(teamActionError = "Selecciona una academia que administras") }
                 return
             }
+            if (!TeamAccess.canLinkToAcademy(academy, team, auth.currentUser?.uid)) {
+                _uiState.update { it.copy(teamActionError = ACADEMY_CATEGORIES_MESSAGE) }
+                return
+            }
         }
         _uiState.update { it.copy(isSavingTeam = true, teamActionError = null) }
         firestore.collection("teams").document(team.id)
@@ -285,7 +311,7 @@ class TeamsViewModel : ViewModel() {
         _uiState.update {
             it.copy(selectedTeamId = team.id, members = emptyList(), membersLoading = true,
                 lineup = null, lineupLoading = false, managementError = null, joinCode = null,
-                joinRequests = emptyList())
+                joinCodeError = null, teamActionError = null, joinRequests = emptyList())
         }
         rosterListener = firestore.collection("teamMemberships")
             .whereEqualTo("teamId", team.id)
@@ -320,7 +346,7 @@ class TeamsViewModel : ViewModel() {
         joinCodeListener?.remove()
         joinRequestsListener?.remove()
         _uiState.update { it.copy(selectedTeamId = null, members = emptyList(), lineup = null,
-            joinCode = null, joinRequests = emptyList(), managementError = null) }
+            joinCode = null, joinCodeError = null, joinRequests = emptyList(), managementError = null) }
     }
 
     fun watchLineup(team: Team, category: String) {
@@ -431,7 +457,7 @@ class TeamsViewModel : ViewModel() {
 
     fun loadOrCreateJoinCode(team: Team) {
         if (!owns(team)) return
-        _uiState.update { it.copy(managementBusy = true, managementError = null) }
+        _uiState.update { it.copy(managementBusy = true, joinCodeError = null) }
         firestore.collection("teamJoinCodes")
             .whereEqualTo("teamId", team.id)
             .get()
@@ -444,7 +470,7 @@ class TeamsViewModel : ViewModel() {
                 }
                 if (validDoc != null) {
                     val code = joinCodeFromDocument(validDoc)
-                    _uiState.update { it.copy(managementBusy = false, joinCode = code, managementError = null) }
+                    _uiState.update { it.copy(managementBusy = false, joinCode = code, joinCodeError = null) }
                 } else {
                     createJoinCode(team)
                 }
@@ -456,9 +482,9 @@ class TeamsViewModel : ViewModel() {
 
     fun createJoinCode(team: Team) {
         if (!owns(team)) return
-        _uiState.update { it.copy(managementBusy = true, managementError = null) }
+        _uiState.update { it.copy(managementBusy = true, joinCodeError = null) }
         val codeRef = firestore.collection("teamJoinCodes").document()
-        val expiresAt = Timestamp(Date(System.currentTimeMillis() + 60 * 60 * 1000L))
+        val expiresAt = Timestamp(Date(System.currentTimeMillis() + JOIN_CODE_TTL_MS))
         val codeMap = mapOf(
             "teamId" to team.id,
             "teamName" to team.name,
@@ -470,10 +496,10 @@ class TeamsViewModel : ViewModel() {
         codeRef.set(codeMap)
             .addOnSuccessListener {
                 val code = TeamJoinCode(codeRef.id, team.id, team.name, team.categories, expiresAt)
-                _uiState.update { it.copy(managementBusy = false, joinCode = code, managementError = null) }
+                _uiState.update { it.copy(managementBusy = false, joinCode = code, joinCodeError = null) }
             }
             .addOnFailureListener { error ->
-                _uiState.update { it.copy(managementBusy = false, managementError = error.localizedMessage ?: "No se pudo generar el QR") }
+                _uiState.update { it.copy(managementBusy = false, joinCodeError = error.localizedMessage ?: "No se pudo generar el QR") }
             }
     }
 
@@ -539,14 +565,14 @@ class TeamsViewModel : ViewModel() {
         val requestRef = firestore.collection("teamJoinRequests").document("${code.teamId}_${user.uid}")
         if (_uiState.value.myJoinRequests.any { it.id == requestRef.id && it.status == "PENDING" }) {
             _uiState.update { it.copy(managementBusy = false, pendingJoinCode = null,
-                managementMessage = "Tu solicitud ya está pendiente de aprobación") }
+                awaitingJoinRequestId = requestRef.id, managementMessage = JOIN_ALREADY_PENDING_MESSAGE) }
             return
         }
         requestRef.set(mapOf("teamId" to code.teamId, "teamName" to code.teamName,
             "playerId" to user.uid, "codeId" to code.id, "playerName" to playerName.trim(),
             "category" to category, "status" to "PENDING", "createdAt" to FieldValue.serverTimestamp()))
             .addOnSuccessListener { _uiState.update { it.copy(managementBusy = false, pendingJoinCode = null,
-                managementMessage = "Solicitud enviada. El entrenador debe aprobar tu ingreso.") } }
+                awaitingJoinRequestId = requestRef.id, managementMessage = JOIN_SENT_MESSAGE) } }
             .addOnFailureListener { error -> _uiState.update { it.copy(managementBusy = false,
                 managementError = error.localizedMessage ?: "No se pudo enviar la solicitud; comprueba si ya está pendiente") } }
     }
@@ -799,16 +825,27 @@ class TeamsViewModel : ViewModel() {
                 _uiState.update { it.copy(isCreating = false, createError = "Selecciona una academia que administres") }
                 return
             }
+            if (!academy.categories.containsAll(categories)) {
+                _uiState.update { it.copy(isCreating = false, createError = ACADEMY_CATEGORIES_MESSAGE) }
+                return
+            }
             teamData["academyId"] = academy.id
         } else if (type == "ACADEMIA" && academyId != null) {
             _uiState.update { it.copy(isCreating = false, createError = "Una academia no puede depender de otra academia") }
             return
         }
         val teamRef = firestore.collection("teams").document()
-        teamRef.set(teamData).addOnSuccessListener {
-            _uiState.update { it.copy(isCreating = false) }
-            onSuccess(teamRef.id)
-        }.addOnFailureListener(::reportCreateError)
+        // set() solo termina cuando el servidor confirma; con mala conexión o una foto pesada
+        // eso tarda y la pantalla se quedaba cargando. La escritura ya se aplica en local y la
+        // lista de equipos la muestra, así que se vuelve enseguida. Si el servidor la rechaza,
+        // Firestore la deshace y el error se muestra en Equipos.
+        teamRef.set(teamData).addOnFailureListener(::reportCreateError)
+        _uiState.update { it.copy(isCreating = false) }
+        onSuccess(teamRef.id)
+    }
+
+    fun clearCreateError() {
+        _uiState.update { it.copy(createError = null) }
     }
 
     private fun compactTeamPhoto(context: Context, uri: Uri): String {
@@ -845,10 +882,11 @@ class TeamsViewModel : ViewModel() {
         val message = if ((error as? FirebaseFirestoreException)?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED)
             "Firestore rechazó los datos del equipo. Comprueba las reglas publicadas."
         else error.localizedMessage ?: "No se pudo crear el equipo"
-        _uiState.update { it.copy(isCreating = false, createError = message) }
+        // El formulario ya se cerró: el aviso va a la pantalla Equipos.
+        _uiState.update { it.copy(isCreating = false, teamActionError = "No se pudo crear el equipo: $message") }
     }
 
-    fun invitePlayer(team: Team, email: String, onSuccess: () -> Unit) {
+    fun invitePlayer(team: Team, email: String, category: String, onSuccess: () -> Unit) {
         val user = auth.currentUser
         val invitedEmail = email.trim()
         if (user == null || !TeamAccess.canManage(team, user.uid)) {
@@ -859,10 +897,15 @@ class TeamsViewModel : ViewModel() {
             _uiState.update { it.copy(inviteActionError = "Ingresa el correo de otro usuario") }
             return
         }
+        if (!TeamAccess.isValidCategory(team, category)) {
+            _uiState.update { it.copy(inviteActionError = "Selecciona una categoría del equipo") }
+            return
+        }
         _uiState.update { it.copy(isInviting = true, inviteActionError = null) }
         firestore.collection("teamInvites").add(mapOf(
             "teamId" to team.id,
             "teamName" to team.name,
+            "category" to category,
             "invitedEmail" to invitedEmail,
             "invitedBy" to user.uid,
             "status" to "PENDING",
@@ -882,13 +925,16 @@ class TeamsViewModel : ViewModel() {
         val memberRef = firestore.collection("teamMemberships").document("${invite.teamId}_${user.uid}")
         val inviteRef = firestore.collection("teamInvites").document(invite.id)
         val batch = firestore.batch()
-        batch.set(memberRef, mapOf(
+        val membership = mutableMapOf<String, Any>(
             "teamId" to invite.teamId,
             "userId" to user.uid,
             "inviteId" to invite.id,
             "playerName" to ((user.displayName?.takeIf(String::isNotBlank) ?: "Jugador ${user.uid.take(6)}").take(80)),
             "acceptedAt" to FieldValue.serverTimestamp()
-        ))
+        )
+        // US-03: la categoría la decide la entrenadora al invitar; las reglas exigen que coincida.
+        if (invite.category.isNotBlank()) membership["category"] = invite.category
+        batch.set(memberRef, membership)
         batch.update(inviteRef, "status", "ACCEPTED")
         batch.commit().addOnSuccessListener {
             _uiState.update { it.copy(processingInviteId = null) }

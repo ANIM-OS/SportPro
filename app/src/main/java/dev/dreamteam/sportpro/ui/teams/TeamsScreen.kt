@@ -59,6 +59,7 @@ fun TeamsScreen(
     val uiState by viewModel.uiState.collectAsState()
     var inviteTeam by remember { mutableStateOf<Team?>(null) }
     var invitedEmail by remember { mutableStateOf("") }
+    var inviteCategory by remember { mutableStateOf("") }
     var editingTeam by remember { mutableStateOf<Team?>(null) }
     var deletingTeam by remember { mutableStateOf<Team?>(null) }
     var photoTeam by remember { mutableStateOf<Team?>(null) }
@@ -159,6 +160,11 @@ fun TeamsScreen(
                         label = { Text("Correo del jugador") },
                         singleLine = true
                     )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Categoría del jugador", style = MaterialTheme.typography.labelMedium)
+                    team.categories.forEach { item ->
+                        FilterChip(selected = inviteCategory == item, onClick = { inviteCategory = item }, label = { Text(item) })
+                    }
                     uiState.inviteActionError?.let { error ->
                         Text(error, color = MaterialTheme.colorScheme.error)
                     }
@@ -166,9 +172,9 @@ fun TeamsScreen(
             },
             confirmButton = {
                 TextButton(
-                    enabled = invitedEmail.isNotBlank() && !uiState.isInviting,
+                    enabled = invitedEmail.isNotBlank() && inviteCategory in team.categories && !uiState.isInviting,
                     onClick = {
-                        viewModel.invitePlayer(team, invitedEmail) {
+                        viewModel.invitePlayer(team, invitedEmail, inviteCategory) {
                             inviteTeam = null
                             invitedEmail = ""
                         }
@@ -190,7 +196,9 @@ fun TeamsScreen(
                 selectedTeamId = returnToTeamId
                 returnToTeamId = null
             },
-            onEmailInvite = { viewModel.clearInviteError(); invitedEmail = ""; inviteTeam = selectedTeam },
+            onEmailInvite = { category ->
+                viewModel.clearInviteError(); invitedEmail = ""; inviteCategory = category; inviteTeam = selectedTeam
+            },
             onOpenTeam = {
                 returnToTeamId = selectedTeam.id
                 selectedTeamId = it.id
@@ -349,6 +357,7 @@ fun TeamsScreen(
                         onInvite = {
                             viewModel.clearInviteError()
                             invitedEmail = ""
+                            inviteCategory = team.categories.firstOrNull().orEmpty()
                             inviteTeam = team
                         },
                         onEdit = { viewModel.clearTeamError(); editingTeam = team },
@@ -698,7 +707,8 @@ private fun TeamInviteCard(
                 )
             }
             Text(
-                text = "ENTRENADOR te invitó a participar en el EQUIPO / DIVISIÓN: ${invite.teamName}",
+                text = "ENTRENADOR te invitó a participar en el EQUIPO / DIVISIÓN: ${invite.teamName}" +
+                    invite.category.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
                 color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium

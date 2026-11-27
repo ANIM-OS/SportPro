@@ -433,7 +433,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'createdBy', 'name', 'type', 'categories', 'playerCount', 'createdAt',
           'city', 'description', 'primaryColor', 'secondaryColor', 'foundedYear',
-          'photoBase64', 'photoUpdatedAt'
+          'photoBase64', 'photoUpdatedAt', 'academyId'
         ])
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.name is string
@@ -445,7 +445,21 @@ service cloud.firestore {
         && (!request.resource.data.keys().hasAny(['playerCount'])
           || request.resource.data.playerCount == 0)
         && request.resource.data.createdAt == request.time
-        && validTeamDetails();
+        && validTeamDetails()
+        && validAcademyLink();
+
+      // US-03: solo un EQUIPO se vincula, a una ACADEMIA del mismo dueño que contenga
+      // todas sus categorías. Sin academyId (o al borrarlo para desvincular) no aplica.
+      function validAcademyLink() {
+        let d = request.resource.data;
+        return !d.keys().hasAny(['academyId'])
+          || (d.academyId is string
+            && d.type == 'EQUIPO'
+            && d.academyId != teamId
+            && get(/databases/$(database)/documents/teams/$(d.academyId)).data.type == 'ACADEMIA'
+            && get(/databases/$(database)/documents/teams/$(d.academyId)).data.createdBy == request.auth.uid
+            && get(/databases/$(database)/documents/teams/$(d.academyId)).data.categories.hasAll(d.categories));
+      }
 
       function validTeamDetails() {
         return (!request.resource.data.keys().hasAny(['city'])
@@ -472,7 +486,7 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'name', 'type', 'categories', 'city', 'description',
           'primaryColor', 'secondaryColor', 'foundedYear',
-          'photoBase64', 'photoUpdatedAt'
+          'photoBase64', 'photoUpdatedAt', 'academyId'
         ])
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
@@ -481,6 +495,11 @@ service cloud.firestore {
         && request.resource.data.categories is list
         && request.resource.data.categories.size() > 0
         && validTeamDetails()
+        && validAcademyLink()
+        // US-03 criterio 3: las reglas no pueden revisar los equipos vinculados, así que una
+        // ACADEMIA solo puede añadir categorías; quitar una dejaría equipos inconsistentes.
+        && (resource.data.type != 'ACADEMIA'
+          || request.resource.data.categories.hasAll(resource.data.categories))
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['photoUpdatedAt'])
           || request.resource.data.photoUpdatedAt == request.time);
       allow delete: if request.auth != null
@@ -496,10 +515,13 @@ service cloud.firestore {
 
       allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
-          'teamId', 'teamName', 'invitedEmail', 'invitedBy', 'status', 'createdAt'
+          'teamId', 'teamName', 'category', 'invitedEmail', 'invitedBy', 'status', 'createdAt'
         ])
         && request.resource.data.teamId is string
         && request.resource.data.teamName is string
+        // US-03 criterio 2: la invitación fija una categoría válida del equipo.
+        && request.resource.data.category is string
+        && request.resource.data.category in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.categories
         && request.resource.data.invitedEmail is string
         && request.resource.data.invitedEmail.size() > 3
         && request.resource.data.invitedEmail.size() <= 254
@@ -525,6 +547,8 @@ service cloud.firestore {
         resource.data.userId == request.auth.uid
         || get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
         || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))
+        // US-06: el tutor verificado ve en qué equipos y categoría está su jugador.
+        || isVerifiedGuardianOf(resource.data.userId)
       );
 
       allow create: if request.auth != null
@@ -554,7 +578,11 @@ service cloud.firestore {
             && request.resource.data.inviteId is string
             && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.status == 'ACCEPTED'
             && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.teamId == request.resource.data.teamId
-            && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.invitedEmail == request.auth.token.email)
+            && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.invitedEmail == request.auth.token.email
+            // Si la invitación tiene categoría, la membresía debe llevar exactamente esa.
+            // Las invitaciones antiguas sin categoría siguen entrando "sin categoría".
+            && (!getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.keys().hasAny(['category'])
+              || request.resource.data.get('category', '') == getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.category))
 
         );
 
@@ -686,27 +714,107 @@ service cloud.firestore {
     // =========================
     // US-22: PRIVACIDAD Y VISIBILIDAD DE DATOS (Fichas de Jugadores)
     // =========================
+    // playerProfiles/{id}: datos deportivos. playerPrivate/{id}: físicos, contacto y emergencia.
+    // Ambos los leen el jugador, su tutor vinculado, la dueña de un equipo donde es miembro y un admin.
+
+    // La entrenadora guarda en playerCoachLinks/{playerId}_{coachId} el equipo por el que accede;
+    // en cada lectura se vuelve a comprobar que el equipo es suyo y que la membresía sigue existiendo.
+    function coachOfPlayer(playerId) {
+      let linkPath = /databases/$(database)/documents/playerCoachLinks/$(playerId + '_' + request.auth.uid);
+      return exists(linkPath)
+        && ownsTeam(get(linkPath).data.teamId)
+        && exists(/databases/$(database)/documents/teamMemberships/$(get(linkPath).data.teamId + '_' + playerId));
+    }
+
+    function canReadPlayer(playerId) {
+      return request.auth != null && (
+        request.auth.uid == playerId
+        || isVerifiedGuardianOf(playerId)
+        || isAdmin()
+        || coachOfPlayer(playerId)
+      );
+    }
+
+    match /playerCoachLinks/{linkId} {
+      allow create, update: if request.auth != null
+        && request.resource.data.keys().hasOnly(['playerId', 'coachId', 'teamId'])
+        && request.resource.data.playerId is string
+        && request.resource.data.teamId is string
+        && request.resource.data.coachId == request.auth.uid
+        && linkId == request.resource.data.playerId + '_' + request.auth.uid
+        && ownsTeam(request.resource.data.teamId)
+        && exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId));
+      allow read, delete: if false;
+    }
+
     match /playerProfiles/{playerId} {
+      allow read: if canReadPlayer(playerId);
 
-      // La ficha existente mezcla campos privados: se reserva al titular.
-      allow read: if request.auth != null && request.auth.uid == playerId;
-
-      // US-04: miniatura de la foto guardada en el documento (plan Spark, sin Cloud Storage).
-      function validPlayerPhoto() {
-        return !request.resource.data.keys().hasAny(['photoBase64'])
-          || (request.resource.data.photoBase64 is string
-            && request.resource.data.photoBase64.size() <= 800000);
+      // Campos sensibles que solo existen en perfiles anteriores a la separación (US-22).
+      function legacySensitiveKeys() {
+        return ['heightCm', 'weightKg', 'phone', 'contactEmail', 'emergencyName', 'emergencyRelation', 'emergencyPhone'];
       }
 
-      allow create: if request.auth != null && (
-        request.auth.uid == playerId
-        || isApprovedCoach()
-      ) && validPlayerPhoto();
-      allow update: if request.auth != null && (
-        request.auth.uid == playerId
-        || isApprovedCoach()
-      ) && validPlayerPhoto();
+      function validSportProfile() {
+        let d = request.resource.data;
+        return (!d.keys().hasAny(['fullName']) || (d.fullName is string && d.fullName.size() <= 80))
+          && (!d.keys().hasAny(['position'])
+            || d.position in ['', 'Portero', 'Defensa central', 'Lateral', 'Mediocampista', 'Extremo', 'Delantero'])
+          && (!d.keys().hasAny(['dominantFoot']) || d.dominantFoot in ['', 'Derecho', 'Izquierdo', 'Ambos'])
+          // US-04: miniatura de la foto guardada en el documento (plan Spark, sin Cloud Storage).
+          && (!d.keys().hasAny(['photoBase64']) || (d.photoBase64 is string && d.photoBase64.size() <= 800000))
+          && (!d.keys().hasAny(['photoPath']) || d.photoPath is string)
+          && d.updatedBy == request.auth.uid;
+      }
 
+      allow create: if request.auth != null
+        && (request.auth.uid == playerId || coachOfPlayer(playerId))
+        && request.resource.data.keys().hasOnly([
+          'fullName', 'position', 'dominantFoot', 'photoBase64', 'photoPath', 'photoUpdatedAt', 'updatedAt', 'updatedBy'
+        ])
+        && validSportProfile();
+
+      // El jugador puede dejar los campos sensibles antiguos como estaban o borrarlos
+      // (migración a playerPrivate), pero nunca añadirlos ni cambiarlos aquí.
+      allow update: if request.auth != null && request.auth.uid == playerId
+        && request.resource.data.keys().hasOnly([
+          'fullName', 'position', 'dominantFoot', 'photoBase64', 'photoPath', 'photoUpdatedAt', 'updatedAt', 'updatedBy',
+          'heightCm', 'weightKg', 'phone', 'contactEmail', 'emergencyName', 'emergencyRelation', 'emergencyPhone'
+        ])
+        && !request.resource.data.diff(resource.data).addedKeys().hasAny(legacySensitiveKeys())
+        && !request.resource.data.diff(resource.data).changedKeys().hasAny(legacySensitiveKeys())
+        && validSportProfile();
+
+      // La entrenadora de su equipo solo cambia datos deportivos.
+      allow update: if request.auth != null && coachOfPlayer(playerId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'fullName', 'position', 'dominantFoot', 'photoBase64', 'photoPath', 'photoUpdatedAt', 'updatedAt', 'updatedBy'
+        ])
+        && validSportProfile();
+
+      allow delete: if false;
+    }
+
+    match /playerPrivate/{playerId} {
+      allow read: if canReadPlayer(playerId);
+
+      function validPrivateProfile() {
+        let d = request.resource.data;
+        return d.keys().hasOnly([
+            'heightCm', 'weightKg', 'phone', 'contactEmail', 'emergencyName', 'emergencyRelation', 'emergencyPhone', 'updatedAt'
+          ])
+          && (d.get('heightCm', null) == null || (d.heightCm is int && d.heightCm >= 50 && d.heightCm <= 250))
+          && (d.get('weightKg', null) == null || (d.weightKg is number && d.weightKg >= 15 && d.weightKg <= 200))
+          && d.get('phone', '') is string && d.get('phone', '').size() <= 20
+          && d.get('contactEmail', '') is string && d.get('contactEmail', '').size() <= 254
+          && d.get('emergencyName', '') is string && d.get('emergencyName', '').size() <= 80
+          && d.get('emergencyRelation', '') is string && d.get('emergencyRelation', '').size() <= 40
+          && d.get('emergencyPhone', '') is string && d.get('emergencyPhone', '').size() <= 20
+          && d.updatedAt == request.time;
+      }
+
+      // Solo el propio jugador escribe sus datos sensibles.
+      allow create, update: if request.auth != null && request.auth.uid == playerId && validPrivateProfile();
       allow delete: if false;
     }
 
@@ -840,29 +948,93 @@ service cloud.firestore {
 
     // US-06: sesiones de entrenamiento del equipo.
     match /trainingSessions/{sessionId} {
+      function teamDoc(teamId) {
+        return get(/databases/$(database)/documents/teams/$(teamId)).data;
+      }
+
+      // Copia de un ejercicio de la biblioteca dentro de la sesión. Validación ligera a propósito:
+      // Firestore corta en 1000 expresiones por petición y la validación completa (tipos y longitudes
+      // de cada campo) solo admitía ~8 ejercicios, e incluso comprobar el tipo de exerciseId y name
+      // no cabía con 20. Aquí: exerciseId y name obligatorios y sin campos extra. Tipos, longitudes y
+      // duración los garantiza la app. Un valor que no es map da error y se deniega.
+      function validSessionExercise(e) {
+        let k = e.keys();
+        return k.hasAll(['exerciseId', 'name'])
+          && k.hasOnly(['exerciseId', 'name', 'description', 'durationMinutes']);
+      }
+      function exerciseAt(list, i) {
+        return list.size() <= i || validSessionExercise(list[i]);
+      }
+      // Las reglas no tienen bucles: se comprueba cada posición (máximo 20 ejercicios).
+      function validExercises(list) {
+        return list is list && list.size() <= 20
+          && exerciseAt(list, 0)
+          && exerciseAt(list, 1)
+          && exerciseAt(list, 2)
+          && exerciseAt(list, 3)
+          && exerciseAt(list, 4)
+          && exerciseAt(list, 5)
+          && exerciseAt(list, 6)
+          && exerciseAt(list, 7)
+          && exerciseAt(list, 8)
+          && exerciseAt(list, 9)
+          && exerciseAt(list, 10)
+          && exerciseAt(list, 11)
+          && exerciseAt(list, 12)
+          && exerciseAt(list, 13)
+          && exerciseAt(list, 14)
+          && exerciseAt(list, 15)
+          && exerciseAt(list, 16)
+          && exerciseAt(list, 17)
+          && exerciseAt(list, 18)
+          && exerciseAt(list, 19);
+      }
+
       function validSession() {
         let d = request.resource.data;
+        let team = teamDoc(d.teamId);
         return d.teamId is string
-          && d.teamName is string
+          // US-06: solo se planifica en un EQUIPO (un equipo antiguo sin type cuenta como EQUIPO).
+          && team.get('type', 'EQUIPO') == 'EQUIPO'
+          && d.teamName == team.name
           && d.category is string
-          && (d.category == 'TODAS'
-            || d.category in get(/databases/$(database)/documents/teams/$(d.teamId)).data.categories)
+          && (d.category == 'TODAS' || d.category in team.categories)
           && d.date is timestamp
           && d.date > request.time
           && d.durationMinutes is int
           && d.durationMinutes >= 1
           && d.durationMinutes <= 600
           && d.objectives is string
-          && d.objectives.size() > 0
+          && d.objectives.trim().size() > 0
           && d.objectives.size() <= 500
-          && d.exercises is list
-          && d.exercises.size() <= 50;
+          && validExercises(d.exercises);
       }
 
-      // El entrenador que la creó y los jugadores del equipo pueden verla.
+      // Jugador: sesiones de su equipo para su categoría o para TODAS.
+      function playerCanRead(s) {
+        let membership = /databases/$(database)/documents/teamMemberships/$(s.teamId + '_' + request.auth.uid);
+        return exists(membership)
+          && (s.category == 'TODAS' || get(membership).data.get('category', '') == s.category);
+      }
+
+      // Tutor: mediante guardianSessionLinks/{teamId}_{categoría}_{tutor}, que se revalida en cada lectura
+      // (vínculo ACTIVE con correo verificado y jugador todavía miembro de esa categoría).
+      function guardianCanRead(s) {
+        let link = /databases/$(database)/documents/guardianSessionLinks/$(s.teamId + '_' + s.category + '_' + request.auth.uid);
+        let playerId = get(link).data.playerId;
+        let membership = /databases/$(database)/documents/teamMemberships/$(s.teamId + '_' + playerId);
+        return exists(link)
+          && isVerifiedGuardianOf(playerId)
+          && exists(membership)
+          && (s.category == 'TODAS' || get(membership).data.get('category', '') == s.category);
+      }
+
+      // La entrenadora que la creó, los jugadores y tutores de esa categoría (o TODAS) y el admin (solo lectura).
       allow read: if request.auth != null && (
         resource.data.createdBy == request.auth.uid
-        || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))
+        || playerCanRead(resource.data)
+        || isAdmin()
+        || guardianCanRead(resource.data)
       );
       allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
@@ -884,9 +1056,26 @@ service cloud.firestore {
         && ownsTeam(request.resource.data.teamId)
         && request.resource.data.updatedAt == request.time
         && validSession();
-      allow delete: if request.auth != null
+      allow delete: if isApprovedCoach()
         && resource.data.createdBy == request.auth.uid
         && resource.data.date > request.time;
+    }
+
+    // US-06: acceso del tutor a las sesiones de los equipos de su jugador.
+    // id "{teamId}_{categoría}_{tutor}"; categoría = la del jugador o 'TODAS'.
+    match /guardianSessionLinks/{linkId} {
+      allow create, update: if request.auth != null
+        && request.resource.data.keys().hasOnly(['teamId', 'category', 'playerId', 'guardianId'])
+        && request.resource.data.teamId is string
+        && request.resource.data.category is string
+        && request.resource.data.playerId is string
+        && request.resource.data.guardianId == request.auth.uid
+        && linkId == request.resource.data.teamId + '_' + request.resource.data.category + '_' + request.auth.uid
+        && isVerifiedGuardianOf(request.resource.data.playerId)
+        && exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId))
+        && (request.resource.data.category == 'TODAS'
+          || get(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId)).data.get('category', '') == request.resource.data.category);
+      allow read, delete: if false;
     }
 
     // US-08: asistencia; id "{sessionId}_{playerId}" para evitar duplicados.
@@ -913,17 +1102,29 @@ service cloud.firestore {
 
     // US-05: mensualidades simuladas; id "{playerId}_{periodo}" para no duplicar periodos.
     match /monthlyFees/{feeId} {
-      // resource == null permite comprobar si el periodo ya existe antes de registrarlo.
+      // PAGADA lleva fecha de pago (timestamp); PENDIENTE no la tiene.
+      function validPaidAt(data) {
+        return (data.status == 'PAGADA' && 'paidAt' in data && data.paidAt is timestamp)
+          || (data.status == 'PENDIENTE' && !('paidAt' in data));
+      }
+
+      // resource == null permite comprobar si el periodo ya existe antes de registrarlo,
+      // solo a una entrenadora aprobada (los demás no pueden saber si existe o no).
+      // El admin consulta en solo lectura (US-05 criterio 4).
       allow get: if request.auth != null && (
-        resource == null
-        || resource.data.coachId == request.auth.uid
-        || resource.data.playerId == request.auth.uid
-        || isVerifiedGuardianOf(resource.data.playerId)
+        (resource == null && isApprovedCoach())
+        || (resource != null && (
+          resource.data.coachId == request.auth.uid
+          || resource.data.playerId == request.auth.uid
+          || isVerifiedGuardianOf(resource.data.playerId)
+          || isAdmin()
+        ))
       );
       allow list: if request.auth != null && (
         resource.data.coachId == request.auth.uid
         || resource.data.playerId == request.auth.uid
         || isVerifiedGuardianOf(resource.data.playerId)
+        || isAdmin()
       );
       allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
@@ -940,13 +1141,16 @@ service cloud.firestore {
           || (request.resource.data.amount is number
             && request.resource.data.amount >= 0
             && request.resource.data.amount <= 100000))
+        && validPaidAt(request.resource.data)
         && request.resource.data.updatedAt == request.time;
       allow update: if isApprovedCoach()
         && resource.data.coachId == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'paidAt', 'updatedAt'])
         && request.resource.data.status in ['PENDIENTE', 'PAGADA']
+        && validPaidAt(request.resource.data)
         && request.resource.data.updatedAt == request.time;
-      allow delete: if request.auth != null && resource.data.coachId == request.auth.uid;
+      // El historial no se borra (US-05 criterio 3).
+      allow delete: if false;
     }
   }
 }

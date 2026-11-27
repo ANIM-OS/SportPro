@@ -46,8 +46,10 @@ class SessionsViewModel : ViewModel() {
                 onResult = { memberships ->
                     if (memberships.isEmpty()) _uiState.update { it.copy(playerLoading = false) }
                     memberships.forEach { membership ->
-                        listeners += sessionRepository.listenTeam(
+                        // Solo TODAS y su categoría: las reglas no dejan leer las de otras categorías.
+                        listeners += sessionRepository.listenForMember(
                             teamId = membership.team.id,
+                            memberCategory = membership.category,
                             onChange = { list ->
                                 sessionsByTeam[membership.team.id] = list.filter { it.appliesTo(membership.category) }
                                 publishPlayerSessions()
@@ -66,14 +68,15 @@ class SessionsViewModel : ViewModel() {
         _uiState.update { it.copy(playerSessions = all.sortedForDisplay(), playerLoading = false) }
     }
 
-    /** Próximas primero (la más cercana arriba) y luego las realizadas (la más reciente arriba). */
-    private fun List<TrainingSession>.sortedForDisplay(): List<TrainingSession> {
-        val (upcoming, done) = partition { it.isEditable() }
-        return upcoming.sortedBy { it.date?.seconds ?: Long.MAX_VALUE } +
-            done.sortedByDescending { it.date?.seconds ?: 0L }
-    }
 
     override fun onCleared() {
         listeners.forEach { it.remove() }
     }
+}
+
+/** Próximas primero (la más cercana arriba) y luego las realizadas (la más reciente arriba). */
+fun List<TrainingSession>.sortedForDisplay(): List<TrainingSession> {
+    val (upcoming, done) = partition { it.isEditable() }
+    return upcoming.sortedBy { it.date?.seconds ?: Long.MAX_VALUE } +
+        done.sortedByDescending { it.date?.seconds ?: 0L }
 }
