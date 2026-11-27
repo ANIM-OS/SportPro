@@ -433,7 +433,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'createdBy', 'name', 'type', 'categories', 'playerCount', 'createdAt',
           'city', 'description', 'primaryColor', 'secondaryColor', 'foundedYear',
-          'photoBase64', 'photoUpdatedAt'
+          'photoBase64', 'photoUpdatedAt', 'academyId'
         ])
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.name is string
@@ -445,7 +445,21 @@ service cloud.firestore {
         && (!request.resource.data.keys().hasAny(['playerCount'])
           || request.resource.data.playerCount == 0)
         && request.resource.data.createdAt == request.time
-        && validTeamDetails();
+        && validTeamDetails()
+        && validAcademyLink();
+
+      // US-03: solo un EQUIPO se vincula, a una ACADEMIA del mismo dueño que contenga
+      // todas sus categorías. Sin academyId (o al borrarlo para desvincular) no aplica.
+      function validAcademyLink() {
+        let d = request.resource.data;
+        return !d.keys().hasAny(['academyId'])
+          || (d.academyId is string
+            && d.type == 'EQUIPO'
+            && d.academyId != teamId
+            && get(/databases/$(database)/documents/teams/$(d.academyId)).data.type == 'ACADEMIA'
+            && get(/databases/$(database)/documents/teams/$(d.academyId)).data.createdBy == request.auth.uid
+            && get(/databases/$(database)/documents/teams/$(d.academyId)).data.categories.hasAll(d.categories));
+      }
 
       function validTeamDetails() {
         return (!request.resource.data.keys().hasAny(['city'])
@@ -472,7 +486,7 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'name', 'type', 'categories', 'city', 'description',
           'primaryColor', 'secondaryColor', 'foundedYear',
-          'photoBase64', 'photoUpdatedAt'
+          'photoBase64', 'photoUpdatedAt', 'academyId'
         ])
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
@@ -481,6 +495,7 @@ service cloud.firestore {
         && request.resource.data.categories is list
         && request.resource.data.categories.size() > 0
         && validTeamDetails()
+        && validAcademyLink()
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['photoUpdatedAt'])
           || request.resource.data.photoUpdatedAt == request.time);
       allow delete: if request.auth != null
@@ -496,10 +511,13 @@ service cloud.firestore {
 
       allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
-          'teamId', 'teamName', 'invitedEmail', 'invitedBy', 'status', 'createdAt'
+          'teamId', 'teamName', 'category', 'invitedEmail', 'invitedBy', 'status', 'createdAt'
         ])
         && request.resource.data.teamId is string
         && request.resource.data.teamName is string
+        // US-03 criterio 2: la invitación fija una categoría válida del equipo.
+        && request.resource.data.category is string
+        && request.resource.data.category in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.categories
         && request.resource.data.invitedEmail is string
         && request.resource.data.invitedEmail.size() > 3
         && request.resource.data.invitedEmail.size() <= 254
@@ -554,7 +572,11 @@ service cloud.firestore {
             && request.resource.data.inviteId is string
             && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.status == 'ACCEPTED'
             && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.teamId == request.resource.data.teamId
-            && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.invitedEmail == request.auth.token.email)
+            && getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.invitedEmail == request.auth.token.email
+            // Si la invitación tiene categoría, la membresía debe llevar exactamente esa.
+            // Las invitaciones antiguas sin categoría siguen entrando "sin categoría".
+            && (!getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.keys().hasAny(['category'])
+              || request.resource.data.get('category', '') == getAfter(/databases/$(database)/documents/teamInvites/$(request.resource.data.inviteId)).data.category))
 
         );
 
