@@ -32,6 +32,7 @@ class SessionFormViewModel : ViewModel() {
     private val sessionRepository = TrainingSessionRepository()
     private val teamRepository = TeamDirectoryRepository()
     private val exerciseRepository = ExerciseRepository()
+    val currentUserId: String? get() = exerciseRepository.currentUserId
     private val _uiState = MutableStateFlow(SessionFormUiState())
     val uiState: StateFlow<SessionFormUiState> = _uiState.asStateFlow()
 
@@ -46,8 +47,12 @@ class SessionFormViewModel : ViewModel() {
             onChange = { teams -> _uiState.update { it.copy(teams = teams.filter { team -> team.type == "EQUIPO" }, teamsLoading = false) } },
             onError = { message -> _uiState.update { it.copy(teamsLoading = false, error = message) } }
         )?.let(listeners::add)
-        exerciseRepository.listenMine(
-            onChange = { list -> _uiState.update { it.copy(exercises = list) } },
+        // US-07: se puede elegir cualquier ejercicio de la biblioteca; primero los propios.
+        exerciseRepository.listenAll(
+            onChange = { list ->
+                val uid = exerciseRepository.currentUserId
+                _uiState.update { it.copy(exercises = list.sortedByDescending { exercise -> exercise.isOwnedBy(uid) }) }
+            },
             onError = { message -> _uiState.update { it.copy(error = message) } }
         )?.let(listeners::add)
         if (sessionId != null) {
