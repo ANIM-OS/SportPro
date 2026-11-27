@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.FamilyRestroom
@@ -15,6 +16,11 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -26,7 +32,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.google.firebase.auth.FirebaseAuth
 import dev.dreamteam.sportpro.domain.access.COACH_PENDING_MESSAGE
+import dev.dreamteam.sportpro.data.repository.MonthlyFeeRepository
 import dev.dreamteam.sportpro.ui.auth.AppRole
+import dev.dreamteam.sportpro.ui.players.AdminFeesScreen
 import dev.dreamteam.sportpro.ui.players.MonthlyFeesScreen
 import dev.dreamteam.sportpro.ui.players.PlayerFeesScreen
 import dev.dreamteam.sportpro.ui.players.PlayerProfileScreen
@@ -45,6 +53,7 @@ private object TrainingRoutes {
     const val PLAYER_PROFILE = "training_player/{playerId}?name={name}&teamId={teamId}"
     const val FEES = "training_fees"
     const val PLAYER_FEES = "training_player_fees/{playerId}"
+    const val ADMIN_FEES = "training_admin_fees"
 
     fun sessionForm(sessionId: String? = null) =
         if (sessionId == null) "training_session_form" else "training_session_form?sessionId=$sessionId"
@@ -69,6 +78,9 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
     val coachPending = AppRole.COACH in roles && !isCoachApproved
     val isPlayer = AppRole.PLAYER in roles
     val isParent = AppRole.PARENT in roles
+    // Admin = existe admins/{uid}; no es un rol elegible. Solo habilita la consulta de mensualidades.
+    var isAdmin by remember(uid) { mutableStateOf(false) }
+    LaunchedEffect(uid) { MonthlyFeeRepository().checkAdmin { isAdmin = it } }
 
     // Otra persona viendo el historial de un jugador: el entrenador solo lee lo que él registró.
     fun viewsAsCoach(playerId: String) = playerId != uid && isCoach
@@ -80,6 +92,7 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
                 coachPending = coachPending,
                 isPlayer = isPlayer,
                 isParent = isParent,
+                isAdmin = isAdmin,
                 onNavigate = { route -> navController.navigate(route) },
                 ownPlayerRoutes = OwnPlayerRoutes(
                     profile = TrainingRoutes.playerProfile(uid),
@@ -167,6 +180,9 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
         composable(TrainingRoutes.FEES) {
             MonthlyFeesScreen(onBack = { navController.popBackStack() })
         }
+        composable(TrainingRoutes.ADMIN_FEES) {
+            AdminFeesScreen(onBack = { navController.popBackStack() })
+        }
         composable(TrainingRoutes.PLAYER_FEES) { entry ->
             val playerId = entry.arguments?.getString("playerId").orEmpty()
             PlayerFeesScreen(
@@ -187,6 +203,7 @@ private fun TrainingHub(
     coachPending: Boolean,
     isPlayer: Boolean,
     isParent: Boolean,
+    isAdmin: Boolean,
     onNavigate: (String) -> Unit,
     ownPlayerRoutes: OwnPlayerRoutes
 ) {
@@ -211,7 +228,7 @@ private fun TrainingHub(
 
         if (coachPending) {
             EmptyState(COACH_PENDING_MESSAGE)
-        } else if (!isCoach && !isPlayer && !isParent) {
+        } else if (!isCoach && !isPlayer && !isParent && !isAdmin) {
             EmptyState("Tu cuenta aún no tiene roles asignados. Elígelos con el botón \"Roles\" de la barra superior.")
         }
 
@@ -287,6 +304,17 @@ private fun TrainingHub(
                 story = "US-04 · US-05 · US-08",
                 icon = Icons.Default.FamilyRestroom,
                 onClick = { onNavigate(TrainingRoutes.PLAYERS) }
+            )
+        }
+
+        if (isAdmin) {
+            SectionLabel("ADMINISTRACIÓN", modifier = Modifier.padding(top = 8.dp))
+            ModuleCard(
+                title = "Mensualidades",
+                description = "Consulta de solo lectura por periodo y equipo.",
+                story = "US-05",
+                icon = Icons.Default.AdminPanelSettings,
+                onClick = { onNavigate(TrainingRoutes.ADMIN_FEES) }
             )
         }
     }
