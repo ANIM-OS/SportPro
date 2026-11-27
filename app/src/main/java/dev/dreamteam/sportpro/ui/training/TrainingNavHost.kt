@@ -54,6 +54,8 @@ private object TrainingRoutes {
     const val FEES = "training_fees"
     const val PLAYER_FEES = "training_player_fees/{playerId}"
     const val ADMIN_FEES = "training_admin_fees"
+    const val ADMIN_SESSIONS = "training_admin_sessions"
+    const val GUARDIAN_SESSIONS = "training_guardian_sessions/{playerId}"
 
     fun sessionForm(sessionId: String? = null) =
         if (sessionId == null) "training_session_form" else "training_session_form?sessionId=$sessionId"
@@ -63,6 +65,7 @@ private object TrainingRoutes {
     fun playerProfile(playerId: String, name: String = "", teamId: String? = null) =
         "training_player/$playerId?name=${Uri.encode(name)}&teamId=${Uri.encode(teamId.orEmpty())}"
     fun playerFees(playerId: String) = "training_player_fees/$playerId"
+    fun guardianSessions(playerId: String) = "training_guardian_sessions/$playerId"
 }
 
 /**
@@ -166,15 +169,20 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
             )
         ) { entry ->
             val playerId = entry.arguments?.getString("playerId").orEmpty()
+            val coachTeamId = entry.arguments?.getString("teamId")?.takeIf { it.isNotBlank() && isCoach }
             PlayerProfileScreen(
                 playerId = playerId,
                 initialName = entry.arguments?.getString("name").orEmpty(),
                 isSelf = playerId == uid,
                 // Solo llega con teamId desde la plantilla de un equipo de la entrenadora.
-                coachTeamId = entry.arguments?.getString("teamId")?.takeIf { it.isNotBlank() && isCoach },
+                coachTeamId = coachTeamId,
                 onBack = { navController.popBackStack() },
                 onOpenAttendance = { navController.navigate(TrainingRoutes.attendance(playerId)) },
-                onOpenFees = { navController.navigate(TrainingRoutes.playerFees(playerId)) }
+                onOpenFees = { navController.navigate(TrainingRoutes.playerFees(playerId)) },
+                // Tutor que abre a su jugador desde "Jugadores a mi cargo" (sin equipo de entrenadora).
+                onOpenSessions = if (isParent && playerId != uid && coachTeamId == null) {
+                    { navController.navigate(TrainingRoutes.guardianSessions(playerId)) }
+                } else null
             )
         }
         composable(TrainingRoutes.FEES) {
@@ -182,6 +190,19 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
         }
         composable(TrainingRoutes.ADMIN_FEES) {
             AdminFeesScreen(onBack = { navController.popBackStack() })
+        }
+        composable(TrainingRoutes.ADMIN_SESSIONS) {
+            AdminSessionsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenSession = { id -> navController.navigate(TrainingRoutes.sessionDetail(id)) }
+            )
+        }
+        composable(TrainingRoutes.GUARDIAN_SESSIONS) { entry ->
+            GuardianSessionsScreen(
+                playerId = entry.arguments?.getString("playerId").orEmpty(),
+                onBack = { navController.popBackStack() },
+                onOpenSession = { id -> navController.navigate(TrainingRoutes.sessionDetail(id)) }
+            )
         }
         composable(TrainingRoutes.PLAYER_FEES) { entry ->
             val playerId = entry.arguments?.getString("playerId").orEmpty()
@@ -300,8 +321,8 @@ private fun TrainingHub(
             SectionLabel("PADRE / TUTOR", modifier = Modifier.padding(top = 8.dp))
             ModuleCard(
                 title = "Jugadores a mi cargo",
-                description = "Perfil, asistencia y mensualidades de tus hijos o tutelados.",
-                story = "US-04 · US-05 · US-08",
+                description = "Perfil, entrenamientos, asistencia y mensualidades de tus hijos o tutelados.",
+                story = "US-04 · US-05 · US-06 · US-08",
                 icon = Icons.Default.FamilyRestroom,
                 onClick = { onNavigate(TrainingRoutes.PLAYERS) }
             )
@@ -315,6 +336,13 @@ private fun TrainingHub(
                 story = "US-05",
                 icon = Icons.Default.AdminPanelSettings,
                 onClick = { onNavigate(TrainingRoutes.ADMIN_FEES) }
+            )
+            ModuleCard(
+                title = "Sesiones de entrenamiento",
+                description = "Planificación de todos los equipos, en solo lectura.",
+                story = "US-06",
+                icon = Icons.Default.Event,
+                onClick = { onNavigate(TrainingRoutes.ADMIN_SESSIONS) }
             )
         }
     }

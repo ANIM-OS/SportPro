@@ -547,6 +547,8 @@ service cloud.firestore {
         resource.data.userId == request.auth.uid
         || get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
         || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))
+        // US-06: el tutor verificado ve en qué equipos y categoría está su jugador.
+        || isVerifiedGuardianOf(resource.data.userId)
       );
 
       allow create: if request.auth != null
@@ -946,29 +948,93 @@ service cloud.firestore {
 
     // US-06: sesiones de entrenamiento del equipo.
     match /trainingSessions/{sessionId} {
+      function teamDoc(teamId) {
+        return get(/databases/$(database)/documents/teams/$(teamId)).data;
+      }
+
+      // Copia de un ejercicio de la biblioteca dentro de la sesión. Validación ligera a propósito:
+      // Firestore corta en 1000 expresiones por petición y la validación completa (tipos y longitudes
+      // de cada campo) solo admitía ~8 ejercicios, e incluso comprobar el tipo de exerciseId y name
+      // no cabía con 20. Aquí: exerciseId y name obligatorios y sin campos extra. Tipos, longitudes y
+      // duración los garantiza la app. Un valor que no es map da error y se deniega.
+      function validSessionExercise(e) {
+        let k = e.keys();
+        return k.hasAll(['exerciseId', 'name'])
+          && k.hasOnly(['exerciseId', 'name', 'description', 'durationMinutes']);
+      }
+      function exerciseAt(list, i) {
+        return list.size() <= i || validSessionExercise(list[i]);
+      }
+      // Las reglas no tienen bucles: se comprueba cada posición (máximo 20 ejercicios).
+      function validExercises(list) {
+        return list is list && list.size() <= 20
+          && exerciseAt(list, 0)
+          && exerciseAt(list, 1)
+          && exerciseAt(list, 2)
+          && exerciseAt(list, 3)
+          && exerciseAt(list, 4)
+          && exerciseAt(list, 5)
+          && exerciseAt(list, 6)
+          && exerciseAt(list, 7)
+          && exerciseAt(list, 8)
+          && exerciseAt(list, 9)
+          && exerciseAt(list, 10)
+          && exerciseAt(list, 11)
+          && exerciseAt(list, 12)
+          && exerciseAt(list, 13)
+          && exerciseAt(list, 14)
+          && exerciseAt(list, 15)
+          && exerciseAt(list, 16)
+          && exerciseAt(list, 17)
+          && exerciseAt(list, 18)
+          && exerciseAt(list, 19);
+      }
+
       function validSession() {
         let d = request.resource.data;
+        let team = teamDoc(d.teamId);
         return d.teamId is string
-          && d.teamName is string
+          // US-06: solo se planifica en un EQUIPO (un equipo antiguo sin type cuenta como EQUIPO).
+          && team.get('type', 'EQUIPO') == 'EQUIPO'
+          && d.teamName == team.name
           && d.category is string
-          && (d.category == 'TODAS'
-            || d.category in get(/databases/$(database)/documents/teams/$(d.teamId)).data.categories)
+          && (d.category == 'TODAS' || d.category in team.categories)
           && d.date is timestamp
           && d.date > request.time
           && d.durationMinutes is int
           && d.durationMinutes >= 1
           && d.durationMinutes <= 600
           && d.objectives is string
-          && d.objectives.size() > 0
+          && d.objectives.trim().size() > 0
           && d.objectives.size() <= 500
-          && d.exercises is list
-          && d.exercises.size() <= 50;
+          && validExercises(d.exercises);
       }
 
-      // El entrenador que la creó y los jugadores del equipo pueden verla.
+      // Jugador: sesiones de su equipo para su categoría o para TODAS.
+      function playerCanRead(s) {
+        let membership = /databases/$(database)/documents/teamMemberships/$(s.teamId + '_' + request.auth.uid);
+        return exists(membership)
+          && (s.category == 'TODAS' || get(membership).data.get('category', '') == s.category);
+      }
+
+      // Tutor: mediante guardianSessionLinks/{teamId}_{categoría}_{tutor}, que se revalida en cada lectura
+      // (vínculo ACTIVE con correo verificado y jugador todavía miembro de esa categoría).
+      function guardianCanRead(s) {
+        let link = /databases/$(database)/documents/guardianSessionLinks/$(s.teamId + '_' + s.category + '_' + request.auth.uid);
+        let playerId = get(link).data.playerId;
+        let membership = /databases/$(database)/documents/teamMemberships/$(s.teamId + '_' + playerId);
+        return exists(link)
+          && isVerifiedGuardianOf(playerId)
+          && exists(membership)
+          && (s.category == 'TODAS' || get(membership).data.get('category', '') == s.category);
+      }
+
+      // La entrenadora que la creó, los jugadores y tutores de esa categoría (o TODAS) y el admin (solo lectura).
       allow read: if request.auth != null && (
         resource.data.createdBy == request.auth.uid
-        || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))
+        || playerCanRead(resource.data)
+        || isAdmin()
+        || guardianCanRead(resource.data)
       );
       allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
@@ -990,9 +1056,26 @@ service cloud.firestore {
         && ownsTeam(request.resource.data.teamId)
         && request.resource.data.updatedAt == request.time
         && validSession();
-      allow delete: if request.auth != null
+      allow delete: if isApprovedCoach()
         && resource.data.createdBy == request.auth.uid
         && resource.data.date > request.time;
+    }
+
+    // US-06: acceso del tutor a las sesiones de los equipos de su jugador.
+    // id "{teamId}_{categoría}_{tutor}"; categoría = la del jugador o 'TODAS'.
+    match /guardianSessionLinks/{linkId} {
+      allow create, update: if request.auth != null
+        && request.resource.data.keys().hasOnly(['teamId', 'category', 'playerId', 'guardianId'])
+        && request.resource.data.teamId is string
+        && request.resource.data.category is string
+        && request.resource.data.playerId is string
+        && request.resource.data.guardianId == request.auth.uid
+        && linkId == request.resource.data.teamId + '_' + request.resource.data.category + '_' + request.auth.uid
+        && isVerifiedGuardianOf(request.resource.data.playerId)
+        && exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId))
+        && (request.resource.data.category == 'TODAS'
+          || get(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId)).data.get('category', '') == request.resource.data.category);
+      allow read, delete: if false;
     }
 
     // US-08: asistencia; id "{sessionId}_{playerId}" para evitar duplicados.
