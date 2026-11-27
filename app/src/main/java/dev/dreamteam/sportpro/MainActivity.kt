@@ -24,6 +24,8 @@ import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.exceptions.ClearCredentialException
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.GetCredentialProviderConfigurationException
+import androidx.credentials.exceptions.NoCredentialException
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -121,7 +123,11 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val startGoogleSignIn: () -> Unit = {
-                    if (!isSigningOut && authViewModel.beginGoogleSignIn()) {
+                    val busy = isSigningOut || authViewModel.authState.value is AuthState.Loading
+                    if (!busy && !isOnline(context)) {
+                        // Sin red, el selector de Google se cierra como si se cancelara.
+                        authViewModel.googleSignInFailed(NO_CONNECTION_MESSAGE)
+                    } else if (!busy && authViewModel.beginGoogleSignIn()) {
                         scope.launch {
                             try {
                                 val googleIdOption = GetSignInWithGoogleOption.Builder(
@@ -143,14 +149,29 @@ class MainActivity : ComponentActivity() {
                                     authViewModel.googleSignInFailed("Credencial de Google no válida")
                                 }
                             } catch (e: GetCredentialCancellationException) {
-                                authViewModel.cancelGoogleSignIn()
+                                // Si se perdió la red durante el selector, no es una cancelación real.
+                                if (isOnline(context)) authViewModel.cancelGoogleSignIn()
+                                else authViewModel.googleSignInFailed(NO_CONNECTION_MESSAGE)
                             } catch (e: CancellationException) {
                                 authViewModel.cancelGoogleSignIn()
                                 throw e
                             } catch (e: GoogleIdTokenParsingException) {
                                 authViewModel.googleSignInFailed("No se pudo validar la credencial de Google")
+                            } catch (e: NoCredentialException) {
+                                Log.w("GoogleSignIn", "No Google credential: ${e.type}", e)
+                                authViewModel.googleSignInFailed(
+                                    if (isOnline(context)) "No hay ninguna cuenta de Google disponible en este dispositivo. Añade una en Ajustes e inténtalo de nuevo"
+                                    else NO_CONNECTION_MESSAGE
+                                )
+                            } catch (e: GetCredentialProviderConfigurationException) {
+                                Log.w("GoogleSignIn", "Credential provider unavailable: ${e.type}", e)
+                                authViewModel.googleSignInFailed("Google Play Services no está disponible o necesita actualizarse")
                             } catch (e: GetCredentialException) {
-                                authViewModel.googleSignInFailed("No se pudo iniciar sesión con Google. Inténtalo nuevamente")
+                                Log.w("GoogleSignIn", "Google sign-in failed: ${e.type}", e)
+                                authViewModel.googleSignInFailed(
+                                    if (isOnline(context)) "No se pudo iniciar sesión con Google. Inténtalo de nuevo"
+                                    else NO_CONNECTION_MESSAGE
+                                )
                             }
                         }
                     }
@@ -203,6 +224,7 @@ class MainActivity : ComponentActivity() {
                             isGoogleAccount = FirebaseAuth.getInstance().currentUser?.providerData.orEmpty()
                                 .any { it.providerId == GoogleAuthProvider.PROVIDER_ID },
                             isLoading = isLoading,
+                            isEditing = editingRoles,
                             onCancelClick = {
                                 if (editingRoles) {
                                     editingRoles = false

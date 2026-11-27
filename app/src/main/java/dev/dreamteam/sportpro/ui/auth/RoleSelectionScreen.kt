@@ -23,6 +23,8 @@ fun RoleSelectionScreen(
     initialRoles: Set<String> = emptySet(),
     isGoogleAccount: Boolean = false,
     isLoading: Boolean = false,
+    // true al entrar desde "Roles" con la cuenta ya completa; false al terminar el registro.
+    isEditing: Boolean = false,
     onCancelClick: () -> Unit,
     isDarkTheme: Boolean = true,
     onToggleTheme: () -> Unit = {}
@@ -88,14 +90,15 @@ fun RoleSelectionScreen(
             Spacer(modifier = Modifier.height(20.dp))
 
             Text(
-                text = "ELIGE TU ROL",
+                text = if (isEditing) "TUS ROLES" else "ELIGE TU ROL",
                 color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Último paso para completar tu cuenta",
+                text = if (isEditing) "Actualiza los roles que describen tu perfil"
+                else "Último paso para completar tu cuenta",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 14.sp
             )
@@ -174,6 +177,15 @@ fun RoleSelectionScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
+            if (selectedRoles.isEmpty()) {
+                Text(
+                    text = "Elige al menos un rol para continuar",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             // Enter Button
             Button(
                 onClick = { onEnterClick(selectedRoles) },
@@ -188,7 +200,7 @@ fun RoleSelectionScreen(
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
                 } else {
                     Text(
-                        text = "ENTRAR A SPORT PRO",
+                        text = if (isEditing) "GUARDAR CAMBIOS" else "ENTRAR A SPORT PRO",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp
@@ -200,7 +212,7 @@ fun RoleSelectionScreen(
 
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "Cancelar y volver al inicio de sesión",
+                    text = if (isEditing) "Cancelar y volver" else "Cancelar y volver al inicio de sesión",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp,
                     modifier = Modifier.clickable(enabled = !isLoading) { onCancelClick() }
