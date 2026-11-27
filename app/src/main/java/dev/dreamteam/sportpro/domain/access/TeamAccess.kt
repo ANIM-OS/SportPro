@@ -1,6 +1,7 @@
 package dev.dreamteam.sportpro.domain.access
 
 import dev.dreamteam.sportpro.data.model.Team
+import dev.dreamteam.sportpro.data.model.TeamJoinRequest
 
 const val COACH_PENDING_MESSAGE = "Tu rol de entrenador está pendiente de aprobación"
 
@@ -21,6 +22,13 @@ object TeamAccess {
         team.type == "EQUIPO" && team.id != academy.id &&
             canManageAcademy(academy, userId) && canManage(team, userId) &&
             academy.categories.containsAll(team.categories)
+
+    /**
+     * US-03: el aviso "Solicitud enviada…" solo tiene sentido mientras esa solicitud siga PENDING.
+     * Si se aprobó, rechazó o canceló (documento borrado), el aviso debe desaparecer.
+     */
+    fun isJoinRequestPending(requestId: String, myRequests: List<TeamJoinRequest>): Boolean =
+        myRequests.any { it.id == requestId && it.status == "PENDING" }
 
     fun canManageTeamInAcademy(academy: Team, team: Team, userId: String?): Boolean =
         team.type == "EQUIPO" && team.academyId == academy.id &&
