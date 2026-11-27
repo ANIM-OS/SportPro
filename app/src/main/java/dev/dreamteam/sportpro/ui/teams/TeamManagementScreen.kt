@@ -68,7 +68,7 @@ import dev.dreamteam.sportpro.data.model.TeamMember
 import dev.dreamteam.sportpro.domain.access.TeamAccess
 
 @Composable
-fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, canUseCoachTools: Boolean, onBack: () -> Unit, onEmailInvite: () -> Unit, onOpenTeam: (Team) -> Unit = {}) {
+fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, canUseCoachTools: Boolean, onBack: () -> Unit, onEmailInvite: (category: String) -> Unit, onOpenTeam: (Team) -> Unit = {}) {
     val state by viewModel.uiState.collectAsState()
     val owner = TeamAccess.canManage(team, userId)
     // Invitar, QR y alineaciones exigen aprobación; editar el equipo y su plantilla, no.
@@ -124,12 +124,13 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
             dismissButton = { TextButton(onClick = { removingMember = null }) { Text("Cancelar") } })
     }
     if (selectingAcademyTeam) {
-        val candidates = state.teams.filter { it.type == "EQUIPO" && it.academyId != team.id && it.createdBy == team.createdBy }
-        AlertDialog(onDismissRequest = { selectingAcademyTeam = false },
+        val candidates = state.teams.filter { it.academyId != team.id && TeamAccess.canLinkToAcademy(team, it, userId) }
+        val closeDialog = { viewModel.clearTeamError(); selectingAcademyTeam = false }
+        AlertDialog(onDismissRequest = closeDialog,
             title = { Text("Vincular equipo") },
             text = {
                 Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                    if (candidates.isEmpty()) Text("No hay equipos disponibles que administres.")
+                    if (candidates.isEmpty()) Text("No hay equipos tuyos cuyas categorías estén incluidas en esta academia.")
                     candidates.forEach { candidate ->
                         TextButton(enabled = !state.isSavingTeam, onClick = {
                             viewModel.setTeamAcademy(candidate, team.id)
@@ -139,7 +140,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
                     state.teamActionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
             },
-            confirmButton = { TextButton(onClick = { selectingAcademyTeam = false }) { Text("Cerrar") } })
+            confirmButton = { TextButton(onClick = closeDialog) { Text("Cerrar") } })
     }
     selectedSlot?.let { index ->
         val available = state.members.filter { it.category == category &&
@@ -206,7 +207,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
                             }) { Text("Desvincular") }
                         }
                     }
-                    OutlinedButton(onClick = { selectingAcademyTeam = true }, enabled = !state.isSavingTeam) {
+                    OutlinedButton(onClick = { viewModel.clearTeamError(); selectingAcademyTeam = true }, enabled = !state.isSavingTeam) {
                         Text("Vincular equipo existente")
                     }
                 }
@@ -229,6 +230,7 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
                         state.managementBusy -> CircularProgressIndicator()
                         else -> Text("Aún no hay un QR vigente. Genera uno para invitar jugadores.", textAlign = TextAlign.Center)
                     }
+                    state.joinCodeError?.let { Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) }
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(onClick = { viewModel.createJoinCode(team) }, enabled = !state.managementBusy) {
                         Text(if (state.joinCode == null) "Generar QR" else "Renovar QR")
@@ -270,12 +272,12 @@ fun TeamManagementScreen(team: Team, userId: String, viewModel: TeamsViewModel, 
             }
             if (approvedOwner) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onEmailInvite) { Text("Invitar por correo") }
+                    OutlinedButton(onClick = { onEmailInvite(category) }) { Text("Invitar por correo") }
                 }
                 Spacer(Modifier.height(10.dp))
             }
             val roster = state.members.filter { it.category == category }
-            Text("${roster.size} jugadores en $category", fontWeight = FontWeight.SemiBold)
+            Text("${roster.size} ${if (roster.size == 1) "jugador" else "jugadores"} en $category", fontWeight = FontWeight.SemiBold)
             if (roster.isEmpty()) Text("Todavía no hay jugadores en esta categoría.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             roster.forEach { member ->
                 Card(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {

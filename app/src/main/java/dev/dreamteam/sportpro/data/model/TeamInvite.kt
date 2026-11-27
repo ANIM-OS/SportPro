@@ -9,5 +9,7 @@ data class TeamInvite(
     val invitedEmail: String,
     val invitedBy: String,
     val status: String,
-    val createdAt: Timestamp?
+    val createdAt: Timestamp?,
+    // Vacía en invitaciones antiguas: el jugador entra "sin categoría".
+    val category: String = ""
 )
