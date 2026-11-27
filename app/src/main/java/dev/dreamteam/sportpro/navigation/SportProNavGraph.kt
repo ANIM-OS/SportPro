@@ -76,6 +76,8 @@ import dev.dreamteam.sportpro.ui.events.EventEditScreen
 import dev.dreamteam.sportpro.ui.events.EventHistoryScreen
 import dev.dreamteam.sportpro.domain.access.COACH_PENDING_MESSAGE
 import dev.dreamteam.sportpro.ui.events.RegisterEventScreen
+import dev.dreamteam.sportpro.ui.events.MatchesForUs13Screen
+import dev.dreamteam.sportpro.ui.events.MatchDetailUs13Screen
 import dev.dreamteam.sportpro.ui.teams.TeamsScreen
 import dev.dreamteam.sportpro.ui.teams.CreateTeamScreen
 import dev.dreamteam.sportpro.ui.live.LiveMatchScreen
@@ -144,6 +146,13 @@ sealed class SportProRoute(
         const val ARG_TYPE_ID = "typeId"
         fun create(typeId: String? = null) =
             if (typeId == null) "event_catalog_edit" else "event_catalog_edit?typeId=$typeId"
+    }
+
+    // Rutas independientes para US-13 y US-14; no reemplazan Partidos de master.
+    data object MatchesUs13 : SportProRoute("matches_us13", "Eventos del partido")
+    data object MatchDetailUs13 : SportProRoute("match_us13/{matchId}", "Detalle del partido") {
+        const val ARG_MATCH_ID = "matchId"
+        fun create(matchId: String) = "match_us13/$matchId"
     }
 
     // ── US-13 · Registro dinámico de eventos en vivo ──
@@ -256,7 +265,7 @@ fun SportProNavGraph(
                                 fontSize = 12.sp
                             )
                         }
-    
+
                         // Theme toggle pill button
                         Surface(
                             onClick = onToggleTheme,
@@ -273,7 +282,7 @@ fun SportProNavGraph(
                                 fontWeight = FontWeight.Bold
                             )
                         }
-    
+
                         // Logout button
                         TextButton(
                             onClick = onLogout,
@@ -376,7 +385,11 @@ fun SportProNavGraph(
                 HomeScreenContent(
                     userEmail = userEmail,
                     onLogout = onLogout,
-                    isLoading = isLoading
+                    isLoading = isLoading,
+                    canManageCatalog = RoleAccess.can(roles, RoleCapability.MANAGE_EVENT_CATALOG, isCoachApproved),
+                    canRegisterEvents = RoleAccess.can(roles, RoleCapability.REGISTER_EVENTS, isCoachApproved),
+                    onOpenCatalog = { navController.navigate(SportProRoute.EventCatalog.route) },
+                    onOpenMatches = { navController.navigate(SportProRoute.MatchesUs13.route) }
                 )
             }
 
@@ -524,6 +537,35 @@ fun SportProNavGraph(
                 }
             }
 
+            // US-13: muestra los partidos de demostración mientras se integra
+            // el repositorio real de partidos del equipo.
+            composable(SportProRoute.MatchesUs13.route) {
+                MatchesForUs13Screen(
+                    onBack = { navController.popBackStack() },
+                    onOpenMatch = { matchId ->
+                        navController.navigate(SportProRoute.MatchDetailUs13.create(matchId))
+                    }
+                )
+            }
+
+            composable(
+                SportProRoute.MatchDetailUs13.route,
+                arguments = listOf(
+                    navArgument(SportProRoute.MatchDetailUs13.ARG_MATCH_ID) { type = NavType.StringType }
+                )
+            ) { entry ->
+                val matchId = entry.arguments?.getString(SportProRoute.MatchDetailUs13.ARG_MATCH_ID).orEmpty()
+                MatchDetailUs13Screen(
+                    matchId = matchId,
+                    canRegister = RoleAccess.can(roles, RoleCapability.REGISTER_EVENTS, isCoachApproved),
+                    onBack = { navController.popBackStack() },
+                    onRegister = { navController.navigate(SportProRoute.RegisterEvent.create(matchId)) },
+                    onOpenEvent = { eventId ->
+                        navController.navigate(SportProRoute.EventDetail.create(matchId, eventId))
+                    }
+                )
+            }
+
             // ───────── US-13 · Registro de eventos en vivo ─────────
             composable(
                 route = SportProRoute.RegisterEvent.route,
@@ -613,7 +655,11 @@ fun SportProNavGraph(
 private fun HomeScreenContent(
     userEmail: String,
     onLogout: () -> Unit,
-    isLoading: Boolean
+    isLoading: Boolean,
+    canManageCatalog: Boolean,
+    canRegisterEvents: Boolean,
+    onOpenCatalog: () -> Unit,
+    onOpenMatches: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -666,7 +712,28 @@ private fun HomeScreenContent(
                     fontSize = 14.sp
                 )
 
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(20.dp))
+
+                if (canManageCatalog) {
+                    Button(
+                        onClick = onOpenCatalog,
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) { Text("CATÁLOGO DE EVENTOS", color = Color.White, fontWeight = FontWeight.Bold) }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+                if (canRegisterEvents) {
+                    Button(
+                        onClick = onOpenMatches,
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) { Text("PARTIDOS · REGISTRO DE EVENTOS", color = Color.White, fontWeight = FontWeight.Bold) }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
 
                 Button(
                     onClick = onLogout,

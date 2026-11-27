@@ -356,79 +356,79 @@ fun RegisterEventScreen(matchId: String, onBack: () -> Unit, onSaved: () -> Unit
 // ─────────────────────────────────────────────────────────────
 // US-14 · Corrección y anulación con trazabilidad
 // ─────────────────────────────────────────────────────────────
-@Composable
-fun EventDetailScreen(
-    matchId: String,
-    eventId: String,
-    canEdit: Boolean,
-    onBack: () -> Unit,
-    onCorrect: () -> Unit,
-    onVoided: () -> Unit,
-    onShowHistory: () -> Unit
-) {
-    var confirmVoid by remember { mutableStateOf(false) }
+// @Composable
+// fun EventDetailScreen(
+//    matchId: String,
+//    eventId: String,
+//    canEdit: Boolean,
+//    onBack: () -> Unit,
+//    onCorrect: () -> Unit,
+//    onVoided: () -> Unit,
+//    onShowHistory: () -> Unit
+//) {
+//    var confirmVoid by remember { mutableStateOf(false) }
 
-    EventScreenShell(
-        title = "DETALLE DEL EVENTO",
-        subtitle = "US-14 · Partido: $matchId · Evento: $eventId",
-        onBack = onBack
-    ) {
+//    EventScreenShell(
+//        title = "DETALLE DEL EVENTO",
+//        subtitle = "US-14 · Partido: $matchId · Evento: $eventId",
+//        onBack = onBack
+//    ) {
         // TODO(US-14): mostrar los datos reales del evento (tipo, minuto, equipo, jugador, estado).
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(onClick = onShowHistory, modifier = Modifier.fillMaxWidth()) {
-                Text("Ver historial de cambios")
-            }
-            if (canEdit) {
-                Button(onClick = onCorrect, modifier = Modifier.fillMaxWidth()) { Text("Corregir") }
-                OutlinedButton(onClick = { confirmVoid = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Anular")
-                }
-            }
-        }
-    }
+//        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+//            OutlinedButton(onClick = onShowHistory, modifier = Modifier.fillMaxWidth()) {
+//                Text("Ver historial de cambios")
+//            }
+//            if (canEdit) {
+//                Button(onClick = onCorrect, modifier = Modifier.fillMaxWidth()) { Text("Corregir") }
+//                OutlinedButton(onClick = { confirmVoid = true }, modifier = Modifier.fillMaxWidth()) {
+//                    Text("Anular")
+//                }
+//            }
+//        }
+//    }
 
-    if (confirmVoid) {
-        AlertDialog(
-            onDismissRequest = { confirmVoid = false },
-            title = { Text("Anular evento") },
-            text = { Text("El evento se marcará como anulado, sin borrar su historial.") },
-            confirmButton = {
-                TextButton(onClick = {
+//    if (confirmVoid) {
+//        AlertDialog(
+//            onDismissRequest = { confirmVoid = false },
+//            title = { Text("Anular evento") },
+//            text = { Text("El evento se marcará como anulado, sin borrar su historial.") },
+//            confirmButton = {
+//                TextButton(onClick = {
                     // TODO(US-14): marcar como anulado en Firestore guardando quién y cuándo (+ motivo).
-                    confirmVoid = false
-                    onVoided()
-                }) { Text("Anular") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmVoid = false }) { Text("Cancelar") }
-            }
-        )
-    }
-}
+//                    confirmVoid = false
+//                    onVoided()
+//                }) { Text("Anular") }
+//            },
+//            dismissButton = {
+//                TextButton(onClick = { confirmVoid = false }) { Text("Cancelar") }
+//            }
+//        )
+//    }
+//}
 
-@Composable
-fun EventEditScreen(matchId: String, eventId: String, onBack: () -> Unit, onSaved: () -> Unit) {
+//@Composable
+//fun EventEditScreen(matchId: String, eventId: String, onBack: () -> Unit, onSaved: () -> Unit) {
     // TODO(US-14): reutilizar el formulario de US-13 precargado; guardar referencia al dato anterior.
-    EventScreenShell(
-        title = "CORREGIR EVENTO",
-        subtitle = "US-14 · Partido: $matchId · Evento: $eventId",
-        onBack = onBack
-    ) {
-        Button(onClick = onSaved, modifier = Modifier.fillMaxWidth()) { Text("Guardar corrección") }
-    }
-}
+//    EventScreenShell(
+//        title = "CORREGIR EVENTO",
+//        subtitle = "US-14 · Partido: $matchId · Evento: $eventId",
+//        onBack = onBack
+//    ) {
+//        Button(onClick = onSaved, modifier = Modifier.fillMaxWidth()) { Text("Guardar corrección") }
+//    }
+//}
 
-@Composable
-fun EventHistoryScreen(matchId: String, eventId: String, onBack: () -> Unit) {
+//@Composable
+//fun EventHistoryScreen(matchId: String, eventId: String, onBack: () -> Unit) {
     // TODO(US-14): lista de versiones (quién modificó/anuló, cuándo y valor anterior).
-    EventScreenShell(
-        title = "HISTORIAL DEL EVENTO",
-        subtitle = "US-14 · Partido: $matchId · Evento: $eventId",
-        onBack = onBack
-    ) {
-        Text(
-            text = "Aún no hay cambios registrados.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
+//    EventScreenShell(
+//        title = "HISTORIAL DEL EVENTO",
+//        subtitle = "US-14 · Partido: $matchId · Evento: $eventId",
+//        onBack = onBack
+//    ) {
+//        Text(
+//            text = "Aún no hay cambios registrados.",
+//            color = MaterialTheme.colorScheme.onSurfaceVariant
+//        )
+//    }
+//}

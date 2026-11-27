@@ -72,7 +72,8 @@ fun MatchDetailUs13Screen(
     matchId: String,
     canRegister: Boolean,
     onBack: () -> Unit,
-    onRegister: () -> Unit
+    onRegister: () -> Unit,
+    onOpenEvent: (String) -> Unit
 ) {
     val context = LocalContext.current
     val repo = remember(context) { LiveEventRepository(context) }
@@ -96,7 +97,12 @@ fun MatchDetailUs13Screen(
                 Text("LIVE · DEMOSTRACIÓN", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
                 Text("${match?.homeTeam ?: "Local"}   vs   ${match?.opponent ?: "Visitante"}", fontWeight = FontWeight.SemiBold)
-                Text("Marcador pendiente de integración", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val homeGoals = events.count { !it.voided && it.typeId.equals("gol", ignoreCase = true) && it.team == match?.homeTeam }
+                val awayGoals = events.count { !it.voided && it.typeId.equals("gol", ignoreCase = true) && it.team == match?.awayTeam }
+                Text("$homeGoals  -  $awayGoals", fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary)
+                Text("Marcador local calculado a partir de goles registrados", fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -112,16 +118,22 @@ fun MatchDetailUs13Screen(
         if (events.isEmpty()) Text("Todavía no hay eventos registrados para este partido.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(events, key = { it.id }) { item: MatchEventRecord ->
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().clickable { onOpenEvent(item.id) },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
                     Column(Modifier.fillMaxWidth().padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("${item.minute?.let { "$it'" } ?: "—"} · ${item.typeName.uppercase()}", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                            Text("LOCAL", color = MaterialTheme.colorScheme.primary, fontSize = 10.sp)
+                            Text(if (item.voided) "ANULADO" else "VER DETALLE",
+                                color = if (item.voided) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                fontSize = 10.sp)
                         }
                         val details = listOfNotNull(item.team, item.player).joinToString(" · ")
                         if (details.isNotBlank()) Text(details, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                         if (item.notes.isNotBlank()) Text(item.notes, fontSize = 12.sp)
-                        Text("Pendiente de sincronización con servidor", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
+                        Text("Registro local · Sin sincronización con Firebase", fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
