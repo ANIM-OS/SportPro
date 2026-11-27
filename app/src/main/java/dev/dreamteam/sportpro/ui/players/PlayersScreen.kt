@@ -27,7 +27,8 @@ fun PlayersScreen(
     isCoach: Boolean,
     isParent: Boolean,
     onBack: () -> Unit,
-    onOpenPlayer: (playerId: String, playerName: String) -> Unit,
+    // teamId solo cuando la entrenadora abre a un jugador desde la plantilla de su equipo.
+    onOpenPlayer: (playerId: String, playerName: String, teamId: String?) -> Unit,
     viewModel: PlayersViewModel = viewModel()
 ) {
     LaunchedEffect(isCoach, isParent) { viewModel.start(isCoach, isParent) }
@@ -66,7 +67,7 @@ fun PlayersScreen(
                                         member.category.ifBlank { null },
                                         member.jerseyNumber?.let { "#$it" }
                                     ).joinToString(" · "),
-                                    onClick = { onOpenPlayer(member.userId, member.playerName) }
+                                    onClick = { onOpenPlayer(member.userId, member.playerName, uiState.selectedTeamId) }
                                 )
                             }
                         }
@@ -114,7 +115,7 @@ fun PlayersScreen(
                             PlayerRow(
                                 name = link.playerName.ifBlank { "Jugador" },
                                 detail = "Jugador a tu cargo",
-                                onClick = { onOpenPlayer(link.playerId, link.playerName) }
+                                onClick = { onOpenPlayer(link.playerId, link.playerName, null) }
                             )
                         }
                     }

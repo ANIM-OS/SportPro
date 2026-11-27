@@ -3,8 +3,9 @@ package dev.dreamteam.sportpro.data.model
 import com.google.firebase.Timestamp
 
 /**
- * US-04: perfil deportivo y de contacto de un jugador (documento playerProfiles/{playerId}).
- * Todos los campos son opcionales; los físicos y de contacto son sensibles (US-22).
+ * US-04: perfil deportivo y de contacto de un jugador. Une playerProfiles/{playerId} (deportivo)
+ * y playerPrivate/{playerId} (físicos, contacto y emergencia, sensibles según la US-22).
+ * Todos los campos son opcionales.
  */
 data class PlayerProfile(
     val playerId: String = "",

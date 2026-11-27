@@ -41,7 +41,8 @@ private object TrainingRoutes {
     const val SESSION_DETAIL = "training_session/{sessionId}"
     const val ATTENDANCE = "training_attendance/{playerId}"
     const val PLAYERS = "training_players"
-    const val PLAYER_PROFILE = "training_player/{playerId}?name={name}"
+    // teamId: equipo por el que entra la entrenadora (vacío para el jugador y el tutor).
+    const val PLAYER_PROFILE = "training_player/{playerId}?name={name}&teamId={teamId}"
     const val FEES = "training_fees"
     const val PLAYER_FEES = "training_player_fees/{playerId}"
 
@@ -50,7 +51,8 @@ private object TrainingRoutes {
 
     fun sessionDetail(sessionId: String) = "training_session/$sessionId"
     fun attendance(playerId: String) = "training_attendance/$playerId"
-    fun playerProfile(playerId: String, name: String = "") = "training_player/$playerId?name=${Uri.encode(name)}"
+    fun playerProfile(playerId: String, name: String = "", teamId: String? = null) =
+        "training_player/$playerId?name=${Uri.encode(name)}&teamId=${Uri.encode(teamId.orEmpty())}"
     fun playerFees(playerId: String) = "training_player_fees/$playerId"
 }
 
@@ -134,23 +136,29 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
                 isCoach = isCoach,
                 isParent = isParent,
                 onBack = { navController.popBackStack() },
-                onOpenPlayer = { id, name -> navController.navigate(TrainingRoutes.playerProfile(id, name)) }
+                onOpenPlayer = { id, name, teamId -> navController.navigate(TrainingRoutes.playerProfile(id, name, teamId)) }
             )
         }
         composable(
             route = TrainingRoutes.PLAYER_PROFILE,
-            arguments = listOf(navArgument("name") {
-                type = NavType.StringType
-                defaultValue = ""
-            })
+            arguments = listOf(
+                navArgument("name") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument("teamId") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                }
+            )
         ) { entry ->
             val playerId = entry.arguments?.getString("playerId").orEmpty()
             PlayerProfileScreen(
                 playerId = playerId,
                 initialName = entry.arguments?.getString("name").orEmpty(),
-                // El propio jugador y los entrenadores mantienen el perfil; el padre o tutor solo consulta.
-                canEdit = playerId == uid || isCoach,
                 isSelf = playerId == uid,
+                // Solo llega con teamId desde la plantilla de un equipo de la entrenadora.
+                coachTeamId = entry.arguments?.getString("teamId")?.takeIf { it.isNotBlank() && isCoach },
                 onBack = { navController.popBackStack() },
                 onOpenAttendance = { navController.navigate(TrainingRoutes.attendance(playerId)) },
                 onOpenFees = { navController.navigate(TrainingRoutes.playerFees(playerId)) }

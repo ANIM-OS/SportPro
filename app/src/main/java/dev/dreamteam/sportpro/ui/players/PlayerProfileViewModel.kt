@@ -58,18 +58,20 @@ class PlayerProfileViewModel : ViewModel() {
     private var playerId: String = ""
     private var loadedPhotoKey: String? = null
 
-    /** [manageGuardians] solo es true cuando el jugador ve su propio perfil. */
-    fun start(playerId: String, manageGuardians: Boolean) {
+    /**
+     * [manageGuardians] solo es true cuando el jugador ve su propio perfil.
+     * [coachTeamId] es el equipo por el que entra la entrenadora: antes de leer se registra el acceso.
+     */
+    fun start(playerId: String, manageGuardians: Boolean, coachTeamId: String? = null) {
         if (this.playerId == playerId) return
         this.playerId = playerId
-        profileListener = repository.listenProfile(
-            playerId = playerId,
-            onChange = { profile ->
-                _uiState.update { it.copy(profile = profile, isLoading = false, error = null) }
-                if (profile != null) loadPhoto(profile)
-            },
-            onError = { message -> _uiState.update { it.copy(isLoading = false, error = message) } }
-        )
+        if (!coachTeamId.isNullOrBlank()) {
+            repository.ensureCoachLink(playerId, coachTeamId,
+                onSuccess = { listenProfile(playerId) },
+                onError = { message -> _uiState.update { it.copy(isLoading = false, error = message) } })
+        } else {
+            listenProfile(playerId)
+        }
         if (manageGuardians) {
             guardiansListener = repository.listenGuardians(
                 playerId = playerId,
@@ -85,6 +87,18 @@ class PlayerProfileViewModel : ViewModel() {
         }
     }
 
+    private fun listenProfile(playerId: String) {
+        profileListener?.remove()
+        profileListener = repository.listenProfile(
+            playerId = playerId,
+            onChange = { profile ->
+                _uiState.update { it.copy(profile = profile, isLoading = false, error = null) }
+                if (profile != null) loadPhoto(profile)
+            },
+            onError = { message -> _uiState.update { it.copy(isLoading = false, error = message) } }
+        )
+    }
+
     private fun loadPhoto(profile: PlayerProfile) {
         val key = "${profile.photoPath}|${profile.photoBase64.hashCode()}"
         if (key == loadedPhotoKey) return
@@ -92,12 +106,14 @@ class PlayerProfileViewModel : ViewModel() {
         repository.loadPhoto(profile) { bitmap -> _uiState.update { it.copy(photo = bitmap) } }
     }
 
-    fun save(form: PlayerProfileForm) {
+    /** [includePrivate] solo es true para el propio jugador: la entrenadora guarda únicamente lo deportivo. */
+    fun save(form: PlayerProfileForm, includePrivate: Boolean) {
         val height = form.heightCm.trim().takeIf { it.isNotEmpty() }?.toIntOrNull()
         val weight = form.weightKg.trim().replace(',', '.').takeIf { it.isNotEmpty() }?.toDoubleOrNull()
         val phonePattern = Regex("^[+]?[0-9 ]{6,20}$")
         val error = when {
             form.fullName.trim().length > 80 -> "El nombre admite hasta 80 caracteres"
+            !includePrivate -> null
             form.heightCm.isNotBlank() && (height == null || height !in 50..250) -> "La estatura debe estar entre 50 y 250 cm"
             form.weightKg.isNotBlank() && (weight == null || weight !in 15.0..200.0) -> "El peso debe estar entre 15 y 200 kg"
             form.phone.isNotBlank() && !phonePattern.matches(form.phone.trim()) -> "Ingresa un teléfono válido"
@@ -106,6 +122,9 @@ class PlayerProfileViewModel : ViewModel() {
             form.emergencyPhone.isNotBlank() && !phonePattern.matches(form.emergencyPhone.trim()) ->
                 "Ingresa un teléfono de emergencia válido"
             form.emergencyName.trim().length > 80 -> "El nombre del contacto de emergencia admite hasta 80 caracteres"
+            // Mismos límites que playerPrivate en firestore.rules.
+            form.emergencyRelation.trim().length > 40 -> "El parentesco admite hasta 40 caracteres"
+            form.contactEmail.trim().length > 254 -> "El correo de contacto es demasiado largo"
             else -> null
         }
         if (error != null) {
@@ -127,6 +146,7 @@ class PlayerProfileViewModel : ViewModel() {
                 emergencyRelation = form.emergencyRelation.trim(),
                 emergencyPhone = form.emergencyPhone.trim()
             ),
+            includePrivate = includePrivate,
             onSuccess = { _uiState.update { it.copy(isSaving = false, message = "Perfil guardado") } },
             onError = { message -> _uiState.update { it.copy(isSaving = false, formError = message) } }
         )
