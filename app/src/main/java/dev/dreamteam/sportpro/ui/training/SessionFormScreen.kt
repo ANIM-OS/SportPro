@@ -32,6 +32,7 @@ fun SessionFormScreen(
 ) {
     LaunchedEffect(sessionId) { viewModel.start(sessionId) }
     val uiState by viewModel.uiState.collectAsState()
+    val currentUserId = viewModel.currentUserId
 
     var teamId by rememberSaveable { mutableStateOf<String?>(null) }
     var category by rememberSaveable { mutableStateOf(TrainingSession.ALL_CATEGORIES) }
@@ -151,12 +152,14 @@ fun SessionFormScreen(
             val previousOnly = uiState.session?.exercises.orEmpty()
                 .filter { old -> uiState.exercises.none { it.id == old.exerciseId } }
             if (uiState.exercises.isEmpty() && previousOnly.isEmpty()) {
-                EmptyState("Tu biblioteca está vacía. Agrega ejercicios para incluirlos en la sesión.")
+                EmptyState("La biblioteca está vacía. Agrega ejercicios para incluirlos en la sesión.")
             }
             uiState.exercises.forEach { exercise ->
                 ExerciseCheckRow(
                     name = exercise.name,
-                    detail = "${exercise.durationMinutes} min",
+                    // Los ejercicios de otras entrenadoras indican su autora.
+                    detail = if (exercise.isOwnedBy(currentUserId)) "${exercise.durationMinutes} min"
+                        else "${exercise.durationMinutes} min · de ${exercise.creatorLabel(currentUserId)}",
                     checked = exercise.id in selectedExerciseIds,
                     onCheckedChange = { checked ->
                         selectedExerciseIds = if (checked) selectedExerciseIds + exercise.id else selectedExerciseIds - exercise.id

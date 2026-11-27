@@ -105,7 +105,8 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
             )
         }
         composable(TrainingRoutes.EXERCISES) {
-            ExerciseLibraryScreen(onBack = { navController.popBackStack() })
+            // Todos la ven; solo la entrenadora aprobada gestiona sus ejercicios (US-07).
+            ExerciseLibraryScreen(canManage = isCoach, onBack = { navController.popBackStack() })
         }
         composable(TrainingRoutes.SESSIONS) {
             SessionsScreen(
@@ -264,7 +265,7 @@ private fun TrainingHub(
             )
             ModuleCard(
                 title = "Biblioteca de ejercicios",
-                description = "Ejercicios reutilizables con nombre, descripción y duración.",
+                description = "Biblioteca compartida: crea los tuyos y reutiliza los de todas.",
                 story = "US-07",
                 icon = Icons.Default.FitnessCenter,
                 onClick = { onNavigate(TrainingRoutes.EXERCISES) }
@@ -325,6 +326,18 @@ private fun TrainingHub(
                 story = "US-04 · US-05 · US-06 · US-08",
                 icon = Icons.Default.FamilyRestroom,
                 onClick = { onNavigate(TrainingRoutes.PLAYERS) }
+            )
+        }
+
+        // US-07 criterio 3: la biblioteca es visible para todos los roles (en solo lectura).
+        if (!isCoach) {
+            SectionLabel("BIBLIOTECA", modifier = Modifier.padding(top = 8.dp))
+            ModuleCard(
+                title = "Biblioteca de ejercicios",
+                description = "Ejercicios que usan las entrenadoras al planificar, en solo lectura.",
+                story = "US-07",
+                icon = Icons.Default.FitnessCenter,
+                onClick = { onNavigate(TrainingRoutes.EXERCISES) }
             )
         }
 

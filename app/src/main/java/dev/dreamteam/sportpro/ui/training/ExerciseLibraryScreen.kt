@@ -20,9 +20,13 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.dreamteam.sportpro.data.model.Exercise
 
-/** US-07: biblioteca reutilizable de ejercicios. */
+/**
+ * US-07: biblioteca compartida de ejercicios. Todos la ven; la entrenadora aprobada ([canManage])
+ * crea ejercicios y edita o elimina solo los suyos.
+ */
 @Composable
 fun ExerciseLibraryScreen(
+    canManage: Boolean,
     onBack: () -> Unit,
     viewModel: ExerciseLibraryViewModel = viewModel()
 ) {
@@ -46,17 +50,19 @@ fun ExerciseLibraryScreen(
         topBar = { SportTopBar(title = "BIBLIOTECA DE EJERCICIOS", onBack = onBack) },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = {
-                    editingId = null
-                    viewModel.clearFormError()
-                    showForm = true
-                },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = Color.White,
-                icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                text = { Text("Nuevo ejercicio", fontWeight = FontWeight.Bold) }
-            )
+            if (canManage) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        editingId = null
+                        viewModel.clearFormError()
+                        showForm = true
+                    },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = Color.White,
+                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    text = { Text("Nuevo ejercicio", fontWeight = FontWeight.Bold) }
+                )
+            }
         }
     ) { innerPadding ->
         LazyColumn(
@@ -66,20 +72,49 @@ fun ExerciseLibraryScreen(
         ) {
             item {
                 Text(
-                    text = "Guarda ejercicios para reutilizarlos al planificar tus sesiones.",
+                    text = if (canManage) {
+                        "Biblioteca compartida: usa cualquier ejercicio al planificar. Solo puedes editar o eliminar los tuyos."
+                    } else {
+                        "Ejercicios que usan las entrenadoras al planificar las sesiones. Solo lectura."
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp
                 )
             }
+            if (canManage) {
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = uiState.onlyMine,
+                            onClick = { viewModel.setOnlyMine(true) },
+                            label = { Text("Mis ejercicios") }
+                        )
+                        FilterChip(
+                            selected = !uiState.onlyMine,
+                            onClick = { viewModel.setOnlyMine(false) },
+                            label = { Text("Todos") }
+                        )
+                    }
+                }
+            }
             when {
                 uiState.isLoading -> item { LoadingBox() }
                 uiState.error != null -> item { MessageText(uiState.error.orEmpty()) }
-                uiState.exercises.isEmpty() -> item {
-                    EmptyState("Aún no tienes ejercicios. Agrega el primero con el botón \"Nuevo ejercicio\".")
+                uiState.visibleExercises.isEmpty() -> item {
+                    EmptyState(
+                        when {
+                            canManage && uiState.onlyMine -> "Aún no tienes ejercicios. Agrega el primero con el botón \"Nuevo ejercicio\"."
+                            canManage -> "La biblioteca está vacía. Agrega el primero con el botón \"Nuevo ejercicio\"."
+                            else -> "La biblioteca aún no tiene ejercicios."
+                        }
+                    )
                 }
-                else -> items(uiState.exercises, key = { it.id }) { exercise ->
+                else -> items(uiState.visibleExercises, key = { it.id }) { exercise ->
                     ExerciseCard(
                         exercise = exercise,
+                        creatorLabel = exercise.creatorLabel(uiState.currentUserId),
+                        // ✏️ y 🗑️ solo en los ejercicios propios de una entrenadora aprobada.
+                        editable = canManage && exercise.isOwnedBy(uiState.currentUserId),
                         onEdit = {
                             editingId = exercise.id
                             viewModel.clearFormError()
@@ -109,7 +144,7 @@ fun ExerciseLibraryScreen(
             onDismissRequest = { toDelete = null },
             title = { Text("Eliminar ejercicio") },
             text = {
-                Text("Se quitará \"${exercise.name}\" de tu biblioteca. Las sesiones ya registradas conservarán su copia del ejercicio.")
+                Text("Se quitará \"${exercise.name}\" de la biblioteca. Las sesiones ya registradas conservarán su copia del ejercicio.")
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -123,7 +158,13 @@ fun ExerciseLibraryScreen(
 }
 
 @Composable
-private fun ExerciseCard(exercise: Exercise, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun ExerciseCard(
+    exercise: Exercise,
+    creatorLabel: String,
+    editable: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
     InfoCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
@@ -133,14 +174,21 @@ private fun ExerciseCard(exercise: Exercise, onEdit: () -> Unit, onDelete: () ->
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
                 )
+                Text(
+                    text = "Creado por $creatorLabel",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp
+                )
                 Spacer(modifier = Modifier.height(4.dp))
                 StatusPill(text = "${exercise.durationMinutes} min", color = MaterialTheme.colorScheme.primary)
             }
-            IconButton(onClick = onEdit) {
-                Icon(Icons.Default.Edit, contentDescription = "Editar", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error)
+            if (editable) {
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Default.Edit, contentDescription = "Editar", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error)
+                }
             }
         }
         if (exercise.description.isNotBlank()) {
