@@ -42,7 +42,8 @@ class SessionFormViewModel : ViewModel() {
         if (started) return
         started = true
         teamRepository.listenOwnedTeams(
-            onChange = { teams -> _uiState.update { it.copy(teams = teams, teamsLoading = false) } },
+            // US-06: las sesiones se planifican en un EQUIPO, no en una ACADEMIA.
+            onChange = { teams -> _uiState.update { it.copy(teams = teams.filter { team -> team.type == "EQUIPO" }, teamsLoading = false) } },
             onError = { message -> _uiState.update { it.copy(teamsLoading = false, error = message) } }
         )?.let(listeners::add)
         exerciseRepository.listenMine(
@@ -83,6 +84,8 @@ class SessionFormViewModel : ViewModel() {
             duration == null || duration !in 1..600 -> "La duración debe estar entre 1 y 600 minutos"
             cleanObjectives.isEmpty() -> "Describe los objetivos de la sesión"
             cleanObjectives.length > 500 -> "Los objetivos admiten hasta 500 caracteres"
+            selectedExerciseIds.size > TrainingSession.MAX_EXERCISES ->
+                "Una sesión admite hasta ${TrainingSession.MAX_EXERCISES} ejercicios"
             else -> null
         }
         if (error != null || team == null || dateMillis == null || duration == null) {

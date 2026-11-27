@@ -56,6 +56,8 @@ fun PlayerProfileScreen(
     onBack: () -> Unit,
     onOpenAttendance: () -> Unit,
     onOpenFees: () -> Unit,
+    // Solo para el tutor: sesiones de entrenamiento de los equipos del jugador (US-06).
+    onOpenSessions: (() -> Unit)? = null,
     viewModel: PlayerProfileViewModel = viewModel()
 ) {
     val canEdit = isSelf || !coachTeamId.isNullOrBlank()
@@ -160,6 +162,11 @@ fun PlayerProfileScreen(
                 }
                 OutlinedButton(onClick = onOpenFees, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) {
                     Text("Mensualidades")
+                }
+            }
+            onOpenSessions?.let { open ->
+                OutlinedButton(onClick = open, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+                    Text("Entrenamientos")
                 }
             }
 

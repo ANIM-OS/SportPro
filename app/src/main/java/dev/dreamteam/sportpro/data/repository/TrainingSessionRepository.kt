@@ -6,6 +6,7 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
 import dev.dreamteam.sportpro.data.model.SessionExercise
 import dev.dreamteam.sportpro.data.model.Team
 import dev.dreamteam.sportpro.data.model.TrainingSession
@@ -14,7 +15,8 @@ import dev.dreamteam.sportpro.data.model.TrainingSession
 class TrainingSessionRepository {
 
     private val auth = FirebaseAuth.getInstance()
-    private val sessions = FirebaseFirestore.getInstance().collection(COLLECTION)
+    private val firestore = FirebaseFirestore.getInstance()
+    private val sessions = firestore.collection(COLLECTION)
 
     /** Sesiones creadas por el entrenador actual. */
     fun listenCreatedByMe(onChange: (List<TrainingSession>) -> Unit, onError: (String) -> Unit): ListenerRegistration? {
@@ -31,15 +33,85 @@ class TrainingSessionRepository {
         }
     }
 
-    /** Sesiones de un equipo, para los jugadores que pertenecen a él. */
-    fun listenTeam(teamId: String, onChange: (List<TrainingSession>) -> Unit, onError: (String) -> Unit): ListenerRegistration =
-        sessions.whereEqualTo("teamId", teamId).addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                onError(error.userMessage("No se pudieron cargar las sesiones"))
-                return@addSnapshotListener
-            }
-            onChange(snapshot?.documents?.mapNotNull(::fromDocument).orEmpty())
+    /**
+     * Sesiones de un equipo que ve un miembro de [memberCategory] (jugador o su tutor): las de TODAS y
+     * las de su categoría. Las reglas exigen filtrar por categoría, así que se escucha una consulta por cada una.
+     */
+    fun listenForMember(
+        teamId: String,
+        memberCategory: String,
+        onChange: (List<TrainingSession>) -> Unit,
+        onError: (String) -> Unit
+    ): List<ListenerRegistration> {
+        val byCategory = mutableMapOf<String, List<TrainingSession>>()
+        val categories = TrainingSession.visibleCategories(memberCategory)
+        return categories.map { category ->
+            sessions.whereEqualTo("teamId", teamId).whereEqualTo("category", category)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        onError(error.userMessage("No se pudieron cargar las sesiones"))
+                        return@addSnapshotListener
+                    }
+                    byCategory[category] = snapshot?.documents?.mapNotNull(::fromDocument).orEmpty()
+                    // Se publica cuando ya respondieron todas las consultas, para no mostrar listas a medias.
+                    if (byCategory.keys.containsAll(categories)) onChange(byCategory.values.flatten())
+                }
         }
+    }
+
+    /** Admin (solo lectura): sesiones más recientes de todos los equipos. */
+    fun listenAll(onChange: (List<TrainingSession>) -> Unit, onError: (String) -> Unit): ListenerRegistration =
+        sessions.orderBy("date", Query.Direction.DESCENDING).limit(ADMIN_LIMIT)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error.userMessage("No se pudieron cargar las sesiones"))
+                    return@addSnapshotListener
+                }
+                onChange(snapshot?.documents?.mapNotNull(::fromDocument).orEmpty())
+            }
+
+    /**
+     * Tutor: crea (o renueva) los enlaces que las reglas usan para dejarle leer las sesiones del equipo
+     * de su jugador, uno para la categoría del jugador y otro para TODAS.
+     */
+    fun ensureGuardianLinks(
+        teamId: String,
+        playerId: String,
+        playerCategory: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val uid = auth.currentUser?.uid ?: run {
+            onError("Debes iniciar sesión")
+            return
+        }
+        val batch = firestore.batch()
+        TrainingSession.visibleCategories(playerCategory).forEach { category ->
+            batch.set(
+                firestore.collection(GUARDIAN_LINKS).document("${teamId}_${category}_$uid"),
+                mapOf("teamId" to teamId, "category" to category, "playerId" to playerId, "guardianId" to uid)
+            )
+        }
+        batch.commit()
+            .addOnSuccessListener { onSuccess() }
+            .addOnFailureListener { onError(it.userMessage("No se pudo habilitar la consulta de entrenamientos")) }
+    }
+
+    /** Equipos y categoría del jugador, para su tutor. */
+    fun loadPlayerMemberships(
+        playerId: String,
+        onResult: (List<Pair<String, String>>) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        firestore.collection("teamMemberships").whereEqualTo("userId", playerId).get()
+            .addOnSuccessListener { snapshot ->
+                onResult(snapshot.documents.mapNotNull { doc ->
+                    val teamId = doc.getString("teamId") ?: return@mapNotNull null
+                    teamId to doc.getString("category").orEmpty()
+                })
+            }
+            .addOnFailureListener { onError(it.userMessage("No se pudieron cargar los equipos del jugador")) }
+    }
 
     fun listenSession(sessionId: String, onChange: (TrainingSession?) -> Unit, onError: (String) -> Unit): ListenerRegistration =
         sessions.document(sessionId).addSnapshotListener { snapshot, error ->
@@ -129,5 +201,7 @@ class TrainingSessionRepository {
 
     companion object {
         const val COLLECTION = "trainingSessions"
+        const val GUARDIAN_LINKS = "guardianSessionLinks"
+        private const val ADMIN_LIMIT = 300L
     }
 }
