@@ -87,6 +87,17 @@ fun AttendanceHistoryScreen(
                                         fontSize = 14.sp
                                     )
                                     Text(record.teamName, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                                    if (record.wasCorrected) {
+                                        val change = uiState.changes[record.id]
+                                        Text(
+                                            text = if (change != null) {
+                                                "Corregido: ${change.from.label} → ${change.to.label}" +
+                                                    (change.changedAt?.let { " · ${it.toDateTimeText()}" } ?: "")
+                                            } else "Corregido",
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontSize = 12.sp
+                                        )
+                                    }
                                 }
                                 StatusPill(record.status.label, attendanceColor(record.status))
                             }
