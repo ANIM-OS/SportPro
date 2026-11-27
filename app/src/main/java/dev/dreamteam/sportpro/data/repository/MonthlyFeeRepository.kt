@@ -51,6 +51,30 @@ class MonthlyFeeRepository {
         return listen(query, onChange, onError)
     }
 
+    /** Admin (solo lectura): todas las mensualidades de un periodo. Las reglas lo exigen con isAdmin(). */
+    fun listenPeriod(
+        period: String,
+        onChange: (List<MonthlyFee>) -> Unit,
+        onError: (String) -> Unit
+    ): ListenerRegistration? {
+        if (auth.currentUser == null) {
+            onError("Debes iniciar sesión")
+            return null
+        }
+        return listen(fees.whereEqualTo("period", period), onChange, onError)
+    }
+
+    /** true si existe admins/{uid}; el propio usuario puede leer su documento. */
+    fun checkAdmin(onResult: (Boolean) -> Unit) {
+        val uid = auth.currentUser?.uid ?: run {
+            onResult(false)
+            return
+        }
+        firestore.collection("admins").document(uid).get()
+            .addOnSuccessListener { onResult(it.exists()) }
+            .addOnFailureListener { onResult(false) }
+    }
+
     /** Registra la mensualidad solo si el jugador no tiene ya una para ese periodo. */
     fun register(
         team: Team,

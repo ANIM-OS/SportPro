@@ -1019,17 +1019,29 @@ service cloud.firestore {
 
     // US-05: mensualidades simuladas; id "{playerId}_{periodo}" para no duplicar periodos.
     match /monthlyFees/{feeId} {
-      // resource == null permite comprobar si el periodo ya existe antes de registrarlo.
+      // PAGADA lleva fecha de pago (timestamp); PENDIENTE no la tiene.
+      function validPaidAt(data) {
+        return (data.status == 'PAGADA' && 'paidAt' in data && data.paidAt is timestamp)
+          || (data.status == 'PENDIENTE' && !('paidAt' in data));
+      }
+
+      // resource == null permite comprobar si el periodo ya existe antes de registrarlo,
+      // solo a una entrenadora aprobada (los demás no pueden saber si existe o no).
+      // El admin consulta en solo lectura (US-05 criterio 4).
       allow get: if request.auth != null && (
-        resource == null
-        || resource.data.coachId == request.auth.uid
-        || resource.data.playerId == request.auth.uid
-        || isVerifiedGuardianOf(resource.data.playerId)
+        (resource == null && isApprovedCoach())
+        || (resource != null && (
+          resource.data.coachId == request.auth.uid
+          || resource.data.playerId == request.auth.uid
+          || isVerifiedGuardianOf(resource.data.playerId)
+          || isAdmin()
+        ))
       );
       allow list: if request.auth != null && (
         resource.data.coachId == request.auth.uid
         || resource.data.playerId == request.auth.uid
         || isVerifiedGuardianOf(resource.data.playerId)
+        || isAdmin()
       );
       allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
@@ -1046,13 +1058,16 @@ service cloud.firestore {
           || (request.resource.data.amount is number
             && request.resource.data.amount >= 0
             && request.resource.data.amount <= 100000))
+        && validPaidAt(request.resource.data)
         && request.resource.data.updatedAt == request.time;
       allow update: if isApprovedCoach()
         && resource.data.coachId == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'paidAt', 'updatedAt'])
         && request.resource.data.status in ['PENDIENTE', 'PAGADA']
+        && validPaidAt(request.resource.data)
         && request.resource.data.updatedAt == request.time;
-      allow delete: if request.auth != null && resource.data.coachId == request.auth.uid;
+      // El historial no se borra (US-05 criterio 3).
+      allow delete: if false;
     }
   }
 }
