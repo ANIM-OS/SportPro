@@ -30,6 +30,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -41,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.dreamteam.sportpro.data.model.CommunityPost
+import dev.dreamteam.sportpro.data.repository.CommunityRepository
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -275,8 +281,9 @@ private fun CommunityPostCard(
                 fontSize = 11.sp
             )
 
+            CommunityLikesCount(post.id)
             TextButton(onClick = onOpenComments) {
-                Text("Comentarios y reacciones")
+                Text("👍 Me gusta · Ver y escribir comentarios")
             }
 
             if (canModerate) {
@@ -295,4 +302,23 @@ private fun formatDate(
     val timestamp = post.createdAt ?: return "Ahora"
     val sdf = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
     return sdf.format(timestamp.toDate())
+}
+
+
+@Composable
+private fun CommunityLikesCount(postId: String) {
+    val repo = remember { CommunityRepository() }
+    var count by remember(postId) { mutableIntStateOf(0) }
+    var error by remember(postId) { mutableStateOf(false) }
+    DisposableEffect(postId) {
+        val listener = repo.observeLikes(postId,
+            onUpdate = { total, _ -> count = total; error = false },
+            onError = { error = true })
+        onDispose { listener.remove() }
+    }
+    Text(
+        text = if (error) "Reacciones no disponibles" else "👍 $count Me gusta",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 12.sp
+    )
 }
