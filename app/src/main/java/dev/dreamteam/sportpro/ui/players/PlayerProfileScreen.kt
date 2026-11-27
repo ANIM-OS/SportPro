@@ -42,22 +42,26 @@ import dev.dreamteam.sportpro.ui.training.SportTextField
 import dev.dreamteam.sportpro.ui.training.SportTopBar
 
 /**
- * US-04: perfil del jugador. [canEdit] es true para el propio jugador y para entrenadores;
- * el padre o tutor vinculado solo consulta. Solo el propio jugador ([isSelf]) vincula a sus padres o tutores.
+ * US-04 / US-22: perfil del jugador. El propio jugador ([isSelf]) edita todo y vincula a sus tutores.
+ * La entrenadora que entra por uno de sus equipos ([coachTeamId]) edita solo los datos deportivos
+ * y ve los sensibles en solo lectura. El padre o tutor vinculado solo consulta.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PlayerProfileScreen(
     playerId: String,
     initialName: String,
-    canEdit: Boolean,
     isSelf: Boolean,
+    coachTeamId: String?,
     onBack: () -> Unit,
     onOpenAttendance: () -> Unit,
     onOpenFees: () -> Unit,
     viewModel: PlayerProfileViewModel = viewModel()
 ) {
-    LaunchedEffect(playerId) { viewModel.start(playerId, manageGuardians = isSelf) }
+    val canEdit = isSelf || !coachTeamId.isNullOrBlank()
+    LaunchedEffect(playerId) {
+        viewModel.start(playerId, manageGuardians = isSelf, coachTeamId = coachTeamId.takeUnless { isSelf })
+    }
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -163,9 +167,11 @@ fun PlayerProfileScreen(
                 EditableProfile(
                     form = form,
                     onFormChange = { form = it },
+                    canEditPrivate = isSelf,
+                    profile = uiState.profile,
                     isSaving = uiState.isSaving,
                     formError = uiState.formError,
-                    onSave = { viewModel.save(form) }
+                    onSave = { viewModel.save(form, includePrivate = isSelf) }
                 )
                 if (isSelf) {
                     GuardiansSection(
@@ -202,7 +208,7 @@ private fun PlayerProfile.toForm(fallbackName: String) = PlayerProfileForm(
 @Composable
 private fun SensitiveNote() {
     Text(
-        text = "🔒 Visible solo para el jugador, sus padres o tutores vinculados y entrenadores.",
+        text = "🔒 Visible solo para el jugador, sus padres o tutores vinculados, la entrenadora de su equipo y la administración.",
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 12.sp
     )
@@ -213,6 +219,8 @@ private fun SensitiveNote() {
 private fun EditableProfile(
     form: PlayerProfileForm,
     onFormChange: (PlayerProfileForm) -> Unit,
+    canEditPrivate: Boolean,
+    profile: PlayerProfile?,
     isSaving: Boolean,
     formError: String?,
     onSave: () -> Unit
@@ -224,6 +232,41 @@ private fun EditableProfile(
     Text("Pie hábil", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
     OptionChips(PlayerProfile.FEET, form.dominantFoot) { onFormChange(form.copy(dominantFoot = it)) }
 
+    if (canEditPrivate) {
+        EditablePrivateFields(form, onFormChange)
+    } else {
+        // La entrenadora ve los datos sensibles pero no los modifica (US-22).
+        SensitiveDetails(profile)
+        Text(
+            text = "Solo el jugador puede modificar sus datos físicos y de contacto.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp
+        )
+    }
+
+    Text(
+        text = "Todos los campos son opcionales; puedes completarlos más adelante.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 12.sp
+    )
+    formError?.let { MessageText(it) }
+    Button(
+        onClick = onSave,
+        enabled = !isSaving,
+        modifier = Modifier.fillMaxWidth().height(50.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+    ) {
+        if (isSaving) {
+            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+        } else {
+            Text("GUARDAR PERFIL", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun EditablePrivateFields(form: PlayerProfileForm, onFormChange: (PlayerProfileForm) -> Unit) {
     SectionLabel("DATOS FÍSICOS", modifier = Modifier.padding(top = 8.dp))
     SensitiveNote()
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -268,26 +311,6 @@ private fun EditableProfile(
         label = "Teléfono de emergencia",
         keyboardType = KeyboardType.Phone
     )
-
-    Text(
-        text = "Todos los campos son opcionales; puedes completarlos más adelante.",
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontSize = 12.sp
-    )
-    formError?.let { MessageText(it) }
-    Button(
-        onClick = onSave,
-        enabled = !isSaving,
-        modifier = Modifier.fillMaxWidth().height(50.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-    ) {
-        if (isSaving) {
-            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
-        } else {
-            Text("GUARDAR PERFIL", color = Color.White, fontWeight = FontWeight.Bold)
-        }
-    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -326,6 +349,13 @@ private fun ReadOnlyProfile(profile: PlayerProfile?) {
         DetailLine("Posición", profile.position)
         DetailLine("Pie hábil", profile.dominantFoot)
     }
+    SensitiveDetails(profile)
+}
+
+/** Datos físicos, de contacto y de emergencia en solo lectura. */
+@Composable
+private fun SensitiveDetails(profile: PlayerProfile?) {
+    if (profile == null) return
     InfoCard {
         SectionLabel("DATOS FÍSICOS")
         Spacer(modifier = Modifier.height(4.dp))

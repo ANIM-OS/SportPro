@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
+import android.util.Log
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
@@ -30,35 +31,82 @@ class PlayerProfileRepository {
     private val firestore = FirebaseFirestore.getInstance()
     private val storage = FirebaseStorage.getInstance()
     private val profiles = firestore.collection(PROFILES)
+    private val privates = firestore.collection(PRIVATE)
+    private val coachLinks = firestore.collection(COACH_LINKS)
     private val guardians = firestore.collection(GUARDIANS)
     private val invites = firestore.collection(INVITES)
 
-    fun listenProfile(playerId: String, onChange: (PlayerProfile?) -> Unit, onError: (String) -> Unit): ListenerRegistration =
-        profiles.document(playerId).addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                onError(error.userMessage("No se pudo cargar el perfil"))
-                return@addSnapshotListener
-            }
-            onChange(snapshot?.takeIf { it.exists() }?.let(::fromDocument))
+    /**
+     * US-22: escucha el perfil deportivo (playerProfiles) y el sensible (playerPrivate) y los une.
+     * Mientras un perfil antiguo no se migre, los datos sensibles se leen del documento deportivo.
+     */
+    fun listenProfile(playerId: String, onChange: (PlayerProfile?) -> Unit, onError: (String) -> Unit): ListenerRegistration {
+        var publicDoc: DocumentSnapshot? = null
+        var privateDoc: DocumentSnapshot? = null
+        var publicLoaded = false
+        var privateLoaded = false
+        fun emit() {
+            if (publicLoaded && privateLoaded) onChange(merge(playerId, publicDoc, privateDoc))
         }
+        val publicListener = profiles.document(playerId).addSnapshotListener { snapshot, error ->
+            if (error != null) return@addSnapshotListener onError(error.userMessage("No se pudo cargar el perfil"))
+            publicDoc = snapshot?.takeIf { it.exists() }
+            publicLoaded = true
+            emit()
+        }
+        val privateListener = privates.document(playerId).addSnapshotListener { snapshot, error ->
+            if (error != null) return@addSnapshotListener onError(error.userMessage("No se pudieron cargar los datos privados del perfil"))
+            privateDoc = snapshot?.takeIf { it.exists() }
+            privateLoaded = true
+            emit()
+        }
+        return ListenerRegistration {
+            publicListener.remove()
+            privateListener.remove()
+        }
+    }
 
-    /** Guarda solo los campos del formulario; la foto se guarda aparte. */
-    fun saveProfile(profile: PlayerProfile, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        val data = hashMapOf<String, Any?>(
+    /**
+     * La entrenadora registra por qué equipo accede al jugador (playerCoachLinks/{playerId}_{coachId}).
+     * Las reglas vuelven a comprobar en cada lectura que el equipo es suyo y que el jugador es miembro.
+     */
+    fun ensureCoachLink(playerId: String, teamId: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        val uid = auth.currentUser?.uid ?: return onError("Inicia sesión de nuevo")
+        coachLinks.document("${playerId}_$uid")
+            .set(mapOf("playerId" to playerId, "coachId" to uid, "teamId" to teamId))
+            .addOnSuccessListener { onSuccess() }
+            .addOnFailureListener { onError(it.userMessage("No tienes acceso al perfil de este jugador")) }
+    }
+
+    /**
+     * Guarda el perfil. Con [includePrivate] (el propio jugador) escribe también playerPrivate y,
+     * en el mismo batch, borra los campos sensibles que aún queden en playerProfiles (migración US-22).
+     * La entrenadora solo guarda los datos deportivos.
+     */
+    fun saveProfile(profile: PlayerProfile, includePrivate: Boolean, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        val sport = hashMapOf<String, Any?>(
             "fullName" to profile.fullName,
             "position" to profile.position,
             "dominantFoot" to profile.dominantFoot,
-            "heightCm" to profile.heightCm,
-            "weightKg" to profile.weightKg,
-            "phone" to profile.phone,
-            "contactEmail" to profile.contactEmail,
-            "emergencyName" to profile.emergencyName,
-            "emergencyRelation" to profile.emergencyRelation,
-            "emergencyPhone" to profile.emergencyPhone,
             "updatedAt" to FieldValue.serverTimestamp(),
             "updatedBy" to auth.currentUser?.uid
         )
-        profiles.document(profile.playerId).set(data, SetOptions.merge())
+        val batch = firestore.batch()
+        if (includePrivate) {
+            SENSITIVE_FIELDS.forEach { sport[it] = FieldValue.delete() }
+            batch.set(privates.document(profile.playerId), mapOf(
+                "heightCm" to profile.heightCm,
+                "weightKg" to profile.weightKg,
+                "phone" to profile.phone,
+                "contactEmail" to profile.contactEmail,
+                "emergencyName" to profile.emergencyName,
+                "emergencyRelation" to profile.emergencyRelation,
+                "emergencyPhone" to profile.emergencyPhone,
+                "updatedAt" to FieldValue.serverTimestamp()
+            ))
+        }
+        batch.set(profiles.document(profile.playerId), sport, SetOptions.merge())
+        batch.commit()
             .addOnSuccessListener { onSuccess() }
             .addOnFailureListener { onError(it.userMessage("No se pudo guardar el perfil")) }
     }
@@ -73,8 +121,15 @@ class PlayerProfileRepository {
             Base64.encodeToString(compressPhoto(context, uri, maxSide = 512, quality = 80), Base64.NO_WRAP)
                 .takeIf { it.length <= MAX_PHOTO_BASE64 }
                 ?: Base64.encodeToString(compressPhoto(context, uri, maxSide = 256, quality = 70), Base64.NO_WRAP)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo procesar la foto del perfil", e)
             onError("No se pudo procesar la imagen. Elige otra foto.")
+            return
+        }
+        // Las reglas rechazan más de 800000 caracteres; mejor avisar que enviarla.
+        if (photo.length > MAX_PHOTO_BASE64) {
+            Log.w(TAG, "Foto del perfil demasiado grande tras comprimir: ${photo.length} caracteres")
+            onError("La imagen es demasiado grande. Elige otra foto.")
             return
         }
         // photoPath se borra para que no se muestre una foto anterior de Cloud Storage.
@@ -211,16 +266,20 @@ class PlayerProfileRepository {
     }
 
     private fun updatePhotoFields(playerId: String, fields: Map<String, Any>, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        // Las reglas exigen updatedBy == quien escribe.
         profiles.document(playerId)
-            .set(fields + mapOf("photoUpdatedAt" to FieldValue.serverTimestamp()), SetOptions.merge())
+            .set(fields + mapOf("photoUpdatedAt" to FieldValue.serverTimestamp(), "updatedBy" to auth.currentUser?.uid), SetOptions.merge())
             .addOnSuccessListener { onSuccess() }
             .addOnFailureListener { onError(it.userMessage("No se pudo guardar la foto")) }
     }
 
     private fun compressPhoto(context: Context, uri: Uri, maxSide: Int, quality: Int): ByteArray {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        // Con inJustDecodeBounds, decodeStream siempre devuelve null: se comprueba el stream,
+        // no el resultado, y el tamaño se valida con outWidth/outHeight.
+        val boundsStream = context.contentResolver.openInputStream(uri)
             ?: throw IllegalArgumentException("Imagen no válida")
+        boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IllegalArgumentException("Imagen no válida")
 
         var sampleSize = 1
@@ -250,22 +309,27 @@ class PlayerProfileRepository {
         }
     }
 
-    private fun fromDocument(doc: DocumentSnapshot): PlayerProfile = PlayerProfile(
-        playerId = doc.id,
-        fullName = doc.getString("fullName").orEmpty(),
-        position = doc.getString("position").orEmpty(),
-        dominantFoot = doc.getString("dominantFoot").orEmpty(),
-        heightCm = doc.getLong("heightCm")?.toInt(),
-        weightKg = doc.getDouble("weightKg"),
-        phone = doc.getString("phone").orEmpty(),
-        contactEmail = doc.getString("contactEmail").orEmpty(),
-        emergencyName = doc.getString("emergencyName").orEmpty(),
-        emergencyRelation = doc.getString("emergencyRelation").orEmpty(),
-        emergencyPhone = doc.getString("emergencyPhone").orEmpty(),
-        photoPath = doc.getString("photoPath").orEmpty(),
-        photoBase64 = doc.getString("photoBase64").orEmpty(),
-        updatedAt = doc.getTimestamp("updatedAt")
-    )
+    /** Une el documento deportivo y el privado; sin privado, usa los campos sensibles antiguos. */
+    private fun merge(playerId: String, sport: DocumentSnapshot?, sensitiveDoc: DocumentSnapshot?): PlayerProfile? {
+        if (sport == null && sensitiveDoc == null) return null
+        val sensitive = sensitiveDoc ?: sport
+        return PlayerProfile(
+            playerId = playerId,
+            fullName = sport?.getString("fullName").orEmpty(),
+            position = sport?.getString("position").orEmpty(),
+            dominantFoot = sport?.getString("dominantFoot").orEmpty(),
+            heightCm = sensitive?.getLong("heightCm")?.toInt(),
+            weightKg = sensitive?.getDouble("weightKg"),
+            phone = sensitive?.getString("phone").orEmpty(),
+            contactEmail = sensitive?.getString("contactEmail").orEmpty(),
+            emergencyName = sensitive?.getString("emergencyName").orEmpty(),
+            emergencyRelation = sensitive?.getString("emergencyRelation").orEmpty(),
+            emergencyPhone = sensitive?.getString("emergencyPhone").orEmpty(),
+            photoPath = sport?.getString("photoPath").orEmpty(),
+            photoBase64 = sport?.getString("photoBase64").orEmpty(),
+            updatedAt = sport?.getTimestamp("updatedAt")
+        )
+    }
 
     private fun guardianFromDocument(doc: DocumentSnapshot): GuardianLink? = GuardianLink(
         id = doc.id, playerId = doc.getString("playerId") ?: return null,
@@ -279,7 +343,14 @@ class PlayerProfileRepository {
         expiresAt = doc.getTimestamp("expiresAt"))
 
     companion object {
+        private const val TAG = "PlayerProfile"
         const val PROFILES = "playerProfiles"
+        const val PRIVATE = "playerPrivate"
+        const val COACH_LINKS = "playerCoachLinks"
+        // US-22: viven en playerPrivate; en perfiles antiguos aún pueden estar en playerProfiles.
+        val SENSITIVE_FIELDS = listOf(
+            "heightCm", "weightKg", "phone", "contactEmail", "emergencyName", "emergencyRelation", "emergencyPhone"
+        )
         const val GUARDIANS = "guardianLinks"
         const val INVITES = "guardianInvites"
         const val LEGACY_GUARDIANS = "playerGuardians"
