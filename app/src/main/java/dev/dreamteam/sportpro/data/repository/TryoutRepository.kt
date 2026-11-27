@@ -7,6 +7,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Source
 import dev.dreamteam.sportpro.data.model.TRYOUT_ACTIVE
 import dev.dreamteam.sportpro.data.model.TRYOUT_CANCELLED
 import dev.dreamteam.sportpro.data.model.TryoutNotice
@@ -84,9 +85,19 @@ class TryoutRepository {
             onResult(false)
             return
         }
-        firestore.collection("admins").document(uid).get()
-            .addOnSuccessListener { onResult(it.exists()) }
-            .addOnFailureListener { onResult(false) }
+        firestore.document("adminAccess/$uid").get(Source.SERVER)
+            .addOnSuccessListener { onResult(currentUserId == uid) }
+            .addOnFailureListener { error ->
+                if (currentUserId != uid ||
+                    (error as? FirebaseFirestoreException)?.code != FirebaseFirestoreException.Code.PERMISSION_DENIED
+                ) {
+                    onResult(false)
+                    return@addOnFailureListener
+                }
+                firestore.document("admins/$uid").get(Source.SERVER)
+                    .addOnSuccessListener { onResult(currentUserId == uid && it.exists()) }
+                    .addOnFailureListener { onResult(false) }
+            }
     }
 
     private fun toNotice(document: DocumentSnapshot) = TryoutNotice(

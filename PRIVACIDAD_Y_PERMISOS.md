@@ -59,6 +59,12 @@ Los montos se reservan al jugador, sus tutores activos y los responsables autori
 - El acceso de un tutor se verifica por jugador. Los enlaces revocados dejan de autorizar lecturas, incluso cuando la cuenta conserva el rol Padre/Tutor. Una relación de tutor no otorga permisos de edición por defecto.
 - Firestore autoriza documentos completos. Los datos con destinatarios distintos deben guardarse por separado. La interfaz, las consultas, las reglas y las notificaciones deben respetar las mismas relaciones activas.
 
+## Eliminación de cuenta
+
+Al eliminar una cuenta se conserva el historial deportivo y de mensualidades simuladas de forma anonimizada. Quitar solo el nombre visible no basta: deben retirarse los identificadores de cuenta de los datos conservados, incluidas las claves de documentos, referencias y campos de texto que permitan identificar a la persona. Los registros que no puedan anonimizarse se deben revisar antes de conservarlos. Los perfiles, contactos y vínculos de acceso deben eliminarse o dejar de autorizar el acceso.
+
+La aplicación registra la solicitud. Su procesamiento requiere un servicio autorizado que pueda revisar los registros compartidos y eliminar la identidad de Firebase Authentication una vez tratadas las referencias. Hasta disponer del proceso, la solicitud debe mostrarse como pendiente.
+
 ## Implementación y criterios de aceptación
 
 1. Añadir la autoridad privada de SportPro y cerrar el acceso amplio de las reglas locales a fichas y publicaciones restringidas. Verificar que el cliente no pueda concederse autoridad.
