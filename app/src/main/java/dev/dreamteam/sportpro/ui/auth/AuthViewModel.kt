@@ -35,7 +35,7 @@ sealed interface AuthState {
 }
 
 private const val MAX_NAME_LENGTH = 100
-private const val NO_CONNECTION_MESSAGE = "Sin conexión. Revisa tu internet e inténtalo de nuevo"
+internal const val NO_CONNECTION_MESSAGE = "Sin conexión. Revisa tu internet e inténtalo de nuevo"
 
 private data class ProfileName(val firstName: String, val lastName: String) {
     fun toFields(): Map<String, Any> = buildMap {
