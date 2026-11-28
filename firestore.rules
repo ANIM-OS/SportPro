@@ -300,6 +300,13 @@ service cloud.firestore {
     // USUARIOS
     // =========================
     match /users/{userId} {
+      // US-17: marca de "visto" de anuncios por equipo; solo el propio usuario la lee y escribe.
+      match /announcementReads/{teamId} {
+        allow read, delete: if request.auth != null && request.auth.uid == userId;
+        allow create, update: if request.auth != null && request.auth.uid == userId
+          && request.resource.data.keys().hasOnly(['lastSeenAt'])
+          && request.resource.data.lastSeenAt == request.time;
+      }
 
       allow read: if request.auth != null
         && request.auth.uid == userId;
@@ -1040,6 +1047,57 @@ service cloud.firestore {
         && d.active is bool && d.order is int
         && d.updatedBy == request.auth.uid && d.updatedAt == request.time;
     }
+    // =========================
+    // US-17: ANUNCIOS INTERNOS
+    // =========================
+    // announcements/{id}: dirigidos a un equipo. Leen la dueña, los miembros, el admin y el tutor con
+    // acceso guardado (announcementGuardians/{teamId}_{uid}, mismo patrón que matchLineups/{m}/guardians).
+    // Peor caso de lectura (tutor): teams, admins, membresía propia, acceso, guardianLinks y membresía
+    // del jugador = 6 documentos distintos (límite 10).
+    function announcementGuardian(teamId) {
+      let path = /databases/$(database)/documents/announcementGuardians/$(teamId + '_' + request.auth.uid);
+      return exists(path)
+        && isVerifiedGuardianOf(get(path).data.playerId)
+        && exists(/databases/$(database)/documents/teamMemberships/$(teamId + '_' + get(path).data.playerId));
+    }
+    function announcementReader(teamId) {
+      return request.auth != null && (ownsCallupTeam(teamId) || isAdmin()
+        || exists(/databases/$(database)/documents/teamMemberships/$(teamId + '_' + request.auth.uid))
+        || announcementGuardian(teamId));
+    }
+    match /announcements/{announcementId} {
+      allow read: if announcementReader(resource.data.teamId);
+      // Crear: dueña aprobada del equipo o admin (cualquier equipo). Peor caso: users, coachApprovals,
+      // teams y admins = 4 documentos.
+      allow create: if request.auth != null
+        && (callupOwnsTeam(request.resource.data.teamId) || isAdmin())
+        && request.resource.data.keys().hasAll(['teamId', 'type', 'title', 'body', 'authorId', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['teamId', 'type', 'title', 'body', 'authorId', 'createdAt'])
+        && request.resource.data.teamId is string
+        && request.resource.data.type in ['CONVOCATORIA', 'ENTRENAMIENTO', 'CAMBIO_HORARIO']
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 1 && request.resource.data.title.size() <= 80
+        && request.resource.data.body is string
+        && request.resource.data.body.size() >= 1 && request.resource.data.body.size() <= 500
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.type == 'EQUIPO';
+      allow update: if false;
+      allow delete: if request.auth != null && (resource.data.authorId == request.auth.uid || isAdmin());
+    }
+    match /announcementGuardians/{accessId} {
+      allow read: if request.auth != null && accessId == resource.data.teamId + '_' + request.auth.uid;
+      allow create, update: if request.auth != null
+        && request.resource.data.keys().hasAll(['teamId', 'playerId', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['teamId', 'playerId', 'updatedAt'])
+        && request.resource.data.teamId is string && request.resource.data.playerId is string
+        && accessId == request.resource.data.teamId + '_' + request.auth.uid
+        && request.resource.data.updatedAt == request.time
+        && isVerifiedGuardianOf(request.resource.data.playerId)
+        && exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId));
+      allow delete: if request.auth != null && accessId == resource.data.teamId + '_' + request.auth.uid;
+    }
+
     match /eventCatalog/{typeId} {
       allow read: if request.auth != null;
       function validGlobalEventType() {

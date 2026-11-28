@@ -1,6 +1,16 @@
 package dev.dreamteam.sportpro.navigation
 
 import androidx.compose.foundation.BorderStroke
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import dev.dreamteam.sportpro.data.repository.MonthlyFeeRepository
+import dev.dreamteam.sportpro.notifications.AnnouncementNotifications
+import dev.dreamteam.sportpro.ui.announcements.AnnouncementsScreen
+import dev.dreamteam.sportpro.ui.announcements.rememberAnnouncementFeed
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.text.BasicText
@@ -48,9 +58,11 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
@@ -109,6 +121,12 @@ sealed class SportProRoute(
     data object Community : SportProRoute(
         route = "community",
         title = "Comunidad"
+    )
+
+    // ── US-17 · Anuncios internos por equipo ──
+    data object Announcements : SportProRoute(
+        route = "announcements",
+        title = "Anuncios"
     )
 
     data object CreatePost : SportProRoute(
@@ -178,9 +196,21 @@ fun SportProNavGraph(
         SportProRoute.Live,
         SportProRoute.Statistics,
         SportProRoute.Community,
+        SportProRoute.Announcements,
         SportProRoute.Teams,
         SportProRoute.Training
     )
+
+    // US-17: anuncios en tiempo real, contador de no leídos y temas FCM de los equipos del usuario.
+    val announcementFeed = rememberAnnouncementFeed(roles)
+    var isAdmin by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { MonthlyFeeRepository().checkAdmin { isAdmin = it } }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        AnnouncementNotifications.ensureChannel(context)
+        if (!AnnouncementNotifications.hasPermission(context)) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
 
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = currentBackStackEntry?.destination?.route
@@ -321,19 +351,23 @@ fun SportProNavGraph(
                             }
                         },
                         icon = {
+                            val unread = if (item == SportProRoute.Announcements) announcementFeed.unread else 0
+                            BadgedBox(badge = { if (unread > 0) Badge { Text(if (unread > 99) "99+" else unread.toString()) } }) {
                             Icon(
                                 imageVector = when (item) {
                                     SportProRoute.Home -> Icons.Default.Home
                                     SportProRoute.Live -> Icons.Default.SportsSoccer
                                     SportProRoute.Statistics -> Icons.Default.BarChart
                                     SportProRoute.Community -> Icons.Default.Groups
+                                    SportProRoute.Announcements -> Icons.Default.Campaign
                                     SportProRoute.Teams -> Icons.Default.Shield
                                     SportProRoute.Training -> Icons.Default.FitnessCenter
                                     // CreatePost, CreateTeam y las rutas de US-12/13/14/19 no están en la barra
                                     else -> Icons.Default.Add
                                 },
-                                contentDescription = item.title
+                                contentDescription = if (unread > 0) "${item.title}, $unread sin leer" else item.title
                             )
+                            }
                         },
                         label = {
                             Text(
@@ -375,6 +409,10 @@ fun SportProNavGraph(
                     isPlayer = AppRole.PLAYER in roles,
                     isGuardian = AppRole.PARENT in roles
                 )
+            }
+
+            composable(SportProRoute.Announcements.route) {
+                AnnouncementsScreen(announcementFeed, coachApproved = isCoachApproved, isAdmin = isAdmin)
             }
 
             composable(SportProRoute.Statistics.route) {

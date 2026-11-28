@@ -245,6 +245,19 @@ histórico se lee una vez (`get`) y el partido en juego o abierto se escucha en 
 real; "Actualizar" vuelve a leer. No se usa `collectionGroup('events')` ni se amplía quién
 lee los eventos: la privacidad de las estadísticas se aplica en la app.
 
+**Anuncios internos (US-17).** Criterios en [`docs/criterios-us17.md`](docs/criterios-us17.md).
+La pestaña **Anuncios** muestra en tiempo real los anuncios de los equipos del usuario
+(dueña, miembro o tutor de un jugador vinculado), agrupados por equipo y con filtro. La
+barra inferior muestra el número de no leídos (`users/{uid}/announcementReads/{teamId}`);
+los anuncios propios no cuentan y se marcan como vistos al abrir la pestaña. Publica la
+entrenadora dueña aprobada en sus equipos o el admin en cualquiera (tipo convocatoria,
+entrenamiento o cambio de horario; título hasta 80 y mensaje hasta 500 caracteres). No se
+editan; los borra el autor o el admin. El tutor guarda una vez su acceso
+(`announcementGuardians/{teamId}_{uid}`) y las reglas comprueban en cada lectura que el
+vínculo siga activo. La app se suscribe al tema FCM `team_<teamId>` de cada equipo (no el
+admin) y se da de baja al salir del equipo o cerrar sesión. Los push se envían a mano desde
+la consola con un texto genérico: ver [`docs/fcm-envio-manual.md`](docs/fcm-envio-manual.md).
+
 ## Pruebas aisladas de Firebase
 
 Los emuladores se conservan únicamente para las pruebas automatizadas de reglas;
@@ -261,7 +274,8 @@ Los eventos tienen sus propios scripts con el SDK cliente en `tests/events/`:
 `client-catalog-check.mjs` (catálogo, US-12), `client-matches-check.mjs` (lecturas de
 la pestaña Partidos), `client-match-events-check.mjs` (eventos e historial, US-13/14) y
 `client-status-stats-check.mjs` (finalizar partido, "Cuenta como gol" y lecturas de
-Estadísticas, US-15/16).
+Estadísticas, US-15/16). Los anuncios (US-17) se prueban con
+`tests/announcements/client-announcements-check.mjs`.
 Solo utiliza `demo-sportpro` en localhost; sus cuentas y datos ficticios no funcionan
 en SportPro ni se migran al Firebase compartido. La interfaz de los datos de prueba
 está en http://127.0.0.1:4000/firestore. No ejecutar `firebase deploy` para estas pruebas.
