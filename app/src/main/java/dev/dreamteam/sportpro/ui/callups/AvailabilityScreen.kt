@@ -6,6 +6,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestoreException
 import dev.dreamteam.sportpro.data.model.GuardianLink
 import dev.dreamteam.sportpro.data.model.GuardianInvite
 import dev.dreamteam.sportpro.data.model.TeamMember
@@ -43,8 +44,8 @@ internal fun AvailabilityActions(row: PlayerCallup, match: CallupMatch?) {
         }
     }
     val open = row.selected && match != null && now < match.responseDeadline.toDate().time && now < match.kickoff.toDate().time
-    Text("${if (row.selected) "Disponibilidad" else "Respuesta anterior"}: ${statusLabel(response?.status)}")
-    if (!row.selected) Text("La convocatoria fue retirada; la respuesta anterior ya no cuenta.")
+    if (row.selected || response != null) Text("${if (row.selected) "Disponibilidad" else "Respuesta anterior"}: ${statusLabel(response?.status)}")
+    if (!row.selected) Text(if (response == null) "La convocatoria fue retirada." else "La convocatoria fue retirada; la respuesta anterior ya no cuenta.")
     if (response?.pending == true) Text("Cambio pendiente de confirmación del servidor.")
     response?.let { Text(if (it.respondedBy == row.playerId) "Respondió el jugador" else "Respondió un padre o tutor autorizado") }
     match?.let { Text("Fecha límite para responder: ${dateLabel(it.responseDeadline.toDate().time)} (hora local)") }
@@ -54,7 +55,12 @@ internal fun AvailabilityActions(row: PlayerCallup, match: CallupMatch?) {
         busy = true; saveError = null; message = null
         repository.respond(row, available)
             .addOnSuccessListener { message = "Respuesta guardada" }
-            .addOnFailureListener { saveError = "No se pudo guardar. Comprueba el plazo para responder y tu autorización e inténtalo de nuevo." }
+            .addOnFailureListener { failure ->
+                val denied = generateSequence<Throwable>(failure) { it.cause }.take(5)
+                    .any { (it as? FirebaseFirestoreException)?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED }
+                saveError = availabilityErrorMessage(denied, match?.responseDeadline?.toDate()?.time,
+                    match?.kickoff?.toDate()?.time, System.currentTimeMillis())
+            }
             .addOnCompleteListener { busy = false }
     }
     val enabled = open && !busy && !loading && readError == null && response?.pending != true
@@ -86,9 +92,15 @@ internal fun CoachAvailability(matchId: String, teamId: String, players: List<Pl
     if (!loading && error == null) players.filter { it.selected }.forEach { player ->
         val response = responses.find { it.playerId == player.playerId }
         val name = roster.find { it.userId == player.playerId }?.playerName ?: "Jugador fuera de la plantilla actual"
-        Text("$name: ${statusLabel(response?.status)}")
+        Text(if (response == null) "$name: Sin respuesta"
+            else listOfNotNull("$name: ${statusLabel(response.status)}", responderLabel(response),
+                response.updatedAtMillis?.let { shortDateLabel(it) }).joinToString(" · "))
     }
 }
+
+/** "27/11 18:05" en la zona del celular. */
+private fun shortDateLabel(millis: Long): String =
+    java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.forLanguageTag("es-PE")).format(java.util.Date(millis))
 
 @Composable
 internal fun GuardianCallups(repository: CallupRepository) {
