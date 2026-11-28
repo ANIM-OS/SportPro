@@ -334,6 +334,92 @@ service cloud.firestore {
         && resource.data.moderated == false
         && request.resource.data.moderated == true;
       allow delete: if false;
+
+      // US-19: permitir interacciones SOLO con publicaciones visibles y activas.
+      function canInteractWithPost() {
+        let path = /databases/$(database)/documents/communityPosts/$(postId);
+        let post = get(path).data;
+        return request.auth != null && exists(path)
+          && post.active == true && post.moderated == false
+          && (
+            post.visibility == 'TODOS'
+            || post.authorId == request.auth.uid
+            || (post.visibility in ['EQUIPO', 'ACADEMIA']
+              && post.get('teamId', '') is string
+              && exists(/databases/$(database)/documents/teams/$(post.teamId))
+              && (
+                get(/databases/$(database)/documents/teams/$(post.teamId)).data.createdBy == request.auth.uid
+                || exists(/databases/$(database)/documents/teamMemberships/$(post.teamId + '_' + request.auth.uid))
+              ))
+          );
+      }
+
+      function canModerateCommunity() {
+        return request.auth != null && (
+          isAdmin()
+          || exists(/databases/$(database)/documents/moderators/$(request.auth.uid))
+        );
+      }
+
+      match /comments/{commentId} {
+        // Las consultas deben filtrar moderated == false.
+        allow get: if canInteractWithPost()
+          && (resource.data.moderated == false || canModerateCommunity());
+        allow list: if canInteractWithPost() && resource.data.moderated == false;
+
+        allow create: if canInteractWithPost()
+          && request.resource.data.keys().hasAll([
+            'authorId', 'authorName', 'text', 'createdAt', 'moderated'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'authorId', 'authorName', 'text', 'createdAt', 'moderated'
+          ])
+          && request.resource.data.authorId == request.auth.uid
+          && request.resource.data.authorName is string
+          && request.resource.data.authorName.size() > 0
+          && request.resource.data.authorName.size() <= 150
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 300
+          && request.resource.data.moderated == false
+          && request.resource.data.createdAt == request.time;
+
+        allow update: if canModerateCommunity()
+          && resource.data.moderated == false
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderated'])
+          && request.resource.data.moderated == true;
+        allow delete: if false;
+
+        match /reports/{reporterId} {
+          // Los reportes NO se muestran públicamente.
+          allow read: if canModerateCommunity();
+          allow create: if canInteractWithPost()
+            && reporterId == request.auth.uid
+            && exists(/databases/$(database)/documents/communityPosts/$(postId)/comments/$(commentId))
+            && get(/databases/$(database)/documents/communityPosts/$(postId)/comments/$(commentId)).data.moderated == false
+            && get(/databases/$(database)/documents/communityPosts/$(postId)/comments/$(commentId)).data.authorId != request.auth.uid
+            && request.resource.data.keys().hasAll(['reporterId', 'reason', 'createdAt'])
+            && request.resource.data.keys().hasOnly(['reporterId', 'reason', 'createdAt'])
+            && request.resource.data.reporterId == request.auth.uid
+            && request.resource.data.reason is string
+            && request.resource.data.reason.size() > 0
+            && request.resource.data.reason.size() <= 500
+            && request.resource.data.createdAt == request.time;
+          allow update, delete: if false;
+        }
+      }
+
+      match /likes/{userId} {
+        allow read: if canInteractWithPost();
+        allow create: if canInteractWithPost()
+          && userId == request.auth.uid
+          && request.resource.data.keys().hasAll(['userId', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['userId', 'createdAt'])
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if canInteractWithPost() && userId == request.auth.uid;
+      }
     }
 
     match /moderators/{moderatorId} {
