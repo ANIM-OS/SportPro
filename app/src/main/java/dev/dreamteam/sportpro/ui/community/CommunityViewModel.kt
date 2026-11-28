@@ -87,6 +87,7 @@ class CommunityViewModel : ViewModel() {
         content: String,
         visibility: String,
         teamId: String?,
+        viaTeamId: String? = null,
         onSuccess: () -> Unit
     ) {
         // El botón se deshabilita al recomponer; dos toques seguidos pueden llegar antes.
@@ -108,6 +109,7 @@ class CommunityViewModel : ViewModel() {
             content = content,
             visibility = visibility,
             teamId = teamId,
+            viaTeamId = viaTeamId,
 
             onSuccess = {
 

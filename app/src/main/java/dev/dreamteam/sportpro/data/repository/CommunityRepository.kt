@@ -1,14 +1,18 @@
 package dev.dreamteam.sportpro.data.repository
 
+import com.google.android.gms.tasks.Tasks
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.Transaction
 import com.google.firebase.Timestamp
 import dev.dreamteam.sportpro.data.model.CommunityPost
+import dev.dreamteam.sportpro.data.model.CommunityRules
+import dev.dreamteam.sportpro.data.model.CommunityTeamInfo
 import dev.dreamteam.sportpro.data.model.CommunityTeamTarget
 import dev.dreamteam.sportpro.domain.access.COACH_PENDING_MESSAGE
 
@@ -17,73 +21,62 @@ class CommunityRepository {
     private val auth = FirebaseAuth.getInstance()
     private val firestore = FirebaseFirestore.getInstance()
 
-    fun loadPostTargets(onResult: (List<CommunityTeamTarget>) -> Unit, onError: (String) -> Unit) {
-        val uid = auth.currentUser?.uid ?: run {
-            onResult(emptyList())
-            return
-        }
-
+    /** Equipos y academias del usuario (dueño o miembro), con la academia vinculada de cada equipo. */
+    private fun loadMyTeams(uid: String, onResult: (List<CommunityTeamInfo>) -> Unit, onError: (String) -> Unit) {
         firestore.collection("teamMemberships").whereEqualTo("userId", uid).get()
             .addOnSuccessListener { memberships ->
                 val memberTeamIds = memberships.documents.mapNotNull { it.getString("teamId") }
                 firestore.collection("teams").whereEqualTo("createdBy", uid).get()
                     .addOnSuccessListener { ownedTeams ->
-                        val teamIds = (memberTeamIds + ownedTeams.documents.map { it.id }).distinct()
-                        loadTargets(teamIds, 0, mutableListOf(), onResult, onError)
+                        val owned = ownedTeams.documents.map(::teamInfo)
+                        val missing = (memberTeamIds - owned.map { it.id }.toSet()).distinct()
+                        val reads = missing.map { firestore.collection("teams").document(it).get() }
+                        Tasks.whenAllComplete(reads).addOnCompleteListener {
+                            val member = reads.mapNotNull { task -> task.result?.takeIf { task.isSuccessful && it.exists() }?.let(::teamInfo) }
+                            onResult(owned + member)
+                        }
                     }
-                    .addOnFailureListener { onError(it.localizedMessage ?: "No se pudieron cargar tus equipos") }
+                    .addOnFailureListener { onError("No se pudieron cargar tus equipos") }
             }
-            .addOnFailureListener { onError(it.localizedMessage ?: "No se pudieron cargar tus membresías") }
+            .addOnFailureListener { onError("No se pudieron cargar tus membresías") }
     }
 
-    private fun loadTargets(
-        ids: List<String>,
-        index: Int,
-        targets: MutableList<CommunityTeamTarget>,
-        onResult: (List<CommunityTeamTarget>) -> Unit,
-        onError: (String) -> Unit
-    ) {
-        if (index >= ids.size) {
-            onResult(targets.sortedBy { it.name.lowercase() })
+    private fun teamInfo(doc: DocumentSnapshot) = CommunityTeamInfo(doc.id, doc.getString("name") ?: "Equipo",
+        doc.getString("type") ?: "EQUIPO", doc.getString("academyId")?.takeIf { it.isNotBlank() })
+
+    fun loadPostTargets(onResult: (List<CommunityTeamTarget>) -> Unit, onError: (String) -> Unit) {
+        val uid = auth.currentUser?.uid ?: run {
+            onResult(emptyList())
             return
         }
-        firestore.collection("teams").document(ids[index]).get()
-            .addOnSuccessListener { team ->
-                if (team.exists()) {
-                    targets += CommunityTeamTarget(
-                        id = team.id,
-                        name = team.getString("name") ?: "Equipo",
-                        type = team.getString("type") ?: "EQUIPO"
-                    )
-                }
-                loadTargets(ids, index + 1, targets, onResult, onError)
-            }
-            .addOnFailureListener { onError(it.localizedMessage ?: "No se pudieron cargar tus equipos") }
+        loadMyTeams(uid, { teams -> onResult(CommunityRules.targets(teams)) }, onError)
     }
 
+    /** US-18: acceso a una academia por pertenecer a un equipo vinculado (las reglas lo revalidan). */
+    private fun openAcademy(academyId: String, viaTeamId: String) =
+        firestore.collection("academyAccess").document("${academyId}_${auth.currentUser?.uid}")
+            .set(mapOf("academyId" to academyId, "teamId" to viaTeamId, "updatedAt" to FieldValue.serverTimestamp()))
+
+    /**
+     * Publica sin bloquear sin conexión: usa el perfil (caché si no hay red), escribe con add() y avisa
+     * de inmediato; la publicación se ve como "Pendiente de sincronizar" hasta que el servidor la confirma.
+     * Si el servidor la rechaza después, [onError] lo indica.
+     */
     fun createPost(
         content: String,
         visibility: String,
         teamId: String?,
         onSuccess: () -> Unit,
-        onError: (String) -> Unit
+        onError: (String) -> Unit,
+        viaTeamId: String? = null
     ) {
         val user = auth.currentUser
         if (user == null) {
             onError("Debes iniciar sesión para publicar")
             return
         }
-        if (content.isBlank()) {
-            onError("Escribe algo antes de publicar")
-            return
-        }
-        if (visibility !in setOf("TODOS", "EQUIPO", "ACADEMIA") ||
-            (visibility == "TODOS" && teamId != null) ||
-            (visibility != "TODOS" && teamId.isNullOrBlank())
-        ) {
-            onError("Selecciona el equipo correspondiente a la visibilidad")
-            return
-        }
+        CommunityRules.validateContent(content)?.let { onError(it); return }
+        CommunityRules.validateTarget(visibility, teamId)?.let { onError(it); return }
 
         firestore.collection("users").document(user.uid).get()
             .addOnSuccessListener { profile ->
@@ -104,12 +97,10 @@ class CommunityRepository {
                             return@addOnCompleteListener
                         }
 
-                        val authorName = user.displayName
-                            ?: user.email?.substringBefore("@")?.replace(".", " ")?.replaceFirstChar { it.uppercase() }
-                            ?: "Usuario SportPro"
                         val post = hashMapOf<String, Any>(
                             "authorId" to user.uid,
-                            "authorName" to authorName,
+                            // Nombre del perfil o "Usuario SportPro"; nunca del correo (las reglas lo comprueban).
+                            "authorName" to CommunityRules.authorName(profile.getString("firstName"), profile.getString("lastName")),
                             "authorRole" to authorRole,
                             "content" to content.trim(),
                             "visibility" to visibility,
@@ -118,15 +109,38 @@ class CommunityRepository {
                             "moderated" to false
                         )
                         if (teamId != null) post["teamId"] = teamId
-
+                        // ACADEMIA por un equipo vinculado: primero el acceso (las escrituras se envían en orden).
+                        if (visibility == "ACADEMIA" && teamId != null && viaTeamId != null) openAcademy(teamId, viaTeamId)
                         firestore.collection("communityPosts").add(post)
-                            .addOnSuccessListener { onSuccess() }
-                            .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo publicar") }
+                            .addOnFailureListener { onError("No se pudo publicar: no tienes permiso o los datos no son válidos.") }
+                        onSuccess()
                     }
             }
-            .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo obtener la información del usuario") }
+            .addOnFailureListener { onError("Conéctate una vez para cargar tu perfil y poder publicar.") }
     }
 
+    private fun toPost(document: DocumentSnapshot) = CommunityPost(
+        id = document.id,
+        authorId = document.getString("authorId") ?: "",
+        authorName = document.getString("authorName") ?: "",
+        authorRole = document.getString("authorRole") ?: "",
+        content = document.getString("content") ?: "",
+        visibility = document.getString("visibility") ?: "TODOS",
+        teamId = document.getString("teamId"),
+        createdAt = document.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
+        active = document.getBoolean("active") ?: true,
+        moderated = document.getBoolean("moderated") ?: false,
+        pending = document.metadata.hasPendingWrites()
+    )
+
+    /**
+     * Publicaciones que el usuario puede ver (las consultas coinciden con las reglas):
+     * - todas: visibility == TODOS (activas, no ocultadas);
+     * - propias: authorId == uid (incluidas las ocultadas, con aviso);
+     * - EQUIPO/ACADEMIA de sus equipos y academias (dueña o miembro);
+     * - ACADEMIA de las academias de sus equipos vinculados (tras guardar academyAccess);
+     * - EQUIPO de los equipos de sus jugadores vinculados si es tutor (tras guardar announcementGuardians).
+     */
     fun observePosts(
         onUpdate: (List<CommunityPost>) -> Unit,
         onError: (String) -> Unit
@@ -138,119 +152,100 @@ class CommunityRepository {
         }
 
         val registrations = mutableListOf<ListenerRegistration>()
-        val teamRegistrations = mutableMapOf<String, ListenerRegistration>()
-        val loadingTeamIds = mutableSetOf<String>()
+        val audienceRegistrations = mutableMapOf<String, ListenerRegistration>()
         val postsByQuery = mutableMapOf<String, List<CommunityPost>>()
-        var memberTeamIds: Set<String>? = null
-        var ownedTeamIds: Set<String>? = null
+        var removed = false
 
         fun emit() {
-            onUpdate(postsByQuery.values.flatten().distinctBy { it.id }.sortedByDescending { it.createdAt })
+            val all = postsByQuery.values.flatten().distinctBy { it.id }
+            onUpdate(CommunityRules.visible(all, uid).sortedByDescending { it.createdAt })
         }
 
-        fun listen(key: String, query: com.google.firebase.firestore.Query) {
-            registrations += query.addSnapshotListener { snapshot, error ->
+        fun listen(key: String, query: Query) {
+            registrations += query.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
                 if (error != null) {
-                    onError(error.localizedMessage ?: "No se pudieron cargar las publicaciones")
+                    onError("No se pudieron cargar las publicaciones")
                     return@addSnapshotListener
                 }
-                postsByQuery[key] = snapshot?.documents.orEmpty().map { document ->
-                    CommunityPost(
-                        id = document.id,
-                        authorId = document.getString("authorId") ?: "",
-                        authorName = document.getString("authorName") ?: "",
-                        authorRole = document.getString("authorRole") ?: "",
-                        content = document.getString("content") ?: "",
-                        visibility = document.getString("visibility") ?: "TODOS",
-                        teamId = document.getString("teamId"),
-                        createdAt = document.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
-                        active = document.getBoolean("active") ?: true,
-                        moderated = document.getBoolean("moderated") ?: false
-                    )
-                }.filter { it.active && !it.moderated }
+                postsByQuery[key] = snapshot?.documents.orEmpty().map(::toPost)
                 emit()
             }
         }
 
-        fun refreshTeamListeners() {
-            val teamIds = (memberTeamIds.orEmpty() + ownedTeamIds.orEmpty()).toSet()
-            (teamRegistrations.keys - teamIds).forEach { teamId ->
-                teamRegistrations.remove(teamId)?.remove()
-                postsByQuery.remove("team:$teamId")
-            }
-            (teamIds - teamRegistrations.keys - loadingTeamIds).forEach { teamId ->
-                loadingTeamIds += teamId
-                firestore.collection("teams").document(teamId).get()
-                    .addOnSuccessListener { team ->
-                        loadingTeamIds -= teamId
-                        if (!team.exists() || teamId !in (memberTeamIds.orEmpty() + ownedTeamIds.orEmpty())) return@addOnSuccessListener
-                        val audience = team.getString("type") ?: "EQUIPO"
-                        val registration = firestore.collection("communityPosts")
-                            .whereEqualTo("teamId", teamId)
-                            .whereEqualTo("visibility", audience)
-                            .whereEqualTo("active", true)
-                            .whereEqualTo("moderated", false)
-                            .addSnapshotListener { snapshot, error ->
-                                if (error != null) {
-                                    onError(error.localizedMessage ?: "No se pudieron cargar las publicaciones del equipo")
-                                    return@addSnapshotListener
-                                }
-                                postsByQuery["team:$teamId"] = snapshot?.documents.orEmpty().map { document ->
-                                    CommunityPost(
-                                        id = document.id,
-                                        authorId = document.getString("authorId") ?: "",
-                                        authorName = document.getString("authorName") ?: "",
-                                        authorRole = document.getString("authorRole") ?: "",
-                                        content = document.getString("content") ?: "",
-                                        visibility = document.getString("visibility") ?: "TODOS",
-                                        teamId = document.getString("teamId"),
-                                        createdAt = document.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
-                                        active = document.getBoolean("active") ?: true,
-                                        moderated = document.getBoolean("moderated") ?: false
-                                    )
-                                }
-                                emit()
-                            }
-                        teamRegistrations[teamId] = registration
+        /** Escucha las publicaciones de un destino (equipo o academia) con la misma forma que exigen las reglas. */
+        fun listenAudience(teamId: String, visibility: String) {
+            val key = "$visibility:$teamId"
+            if (removed || key in audienceRegistrations) return
+            audienceRegistrations[key] = firestore.collection("communityPosts")
+                .whereEqualTo("teamId", teamId)
+                .whereEqualTo("visibility", visibility)
+                .whereEqualTo("active", true)
+                .whereEqualTo("moderated", false)
+                .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                    if (error != null) {
+                        onError("No se pudieron cargar las publicaciones del equipo")
+                        return@addSnapshotListener
                     }
-                    .addOnFailureListener {
-                        loadingTeamIds -= teamId
-                        onError(it.localizedMessage ?: "No se pudo cargar el equipo")
-                    }
-            }
-            emit()
+                    postsByQuery[key] = snapshot?.documents.orEmpty().map(::toPost)
+                    emit()
+                }
         }
 
         listen("public", firestore.collection("communityPosts")
             .whereEqualTo("visibility", "TODOS")
             .whereEqualTo("active", true)
             .whereEqualTo("moderated", false))
-        listen("authored", firestore.collection("communityPosts")
-            .whereEqualTo("authorId", uid)
-            .whereEqualTo("active", true)
-            .whereEqualTo("moderated", false))
+        // Propias sin filtro de moderación: el autor ve las suyas ocultas con "Ocultada por moderación".
+        listen("authored", firestore.collection("communityPosts").whereEqualTo("authorId", uid))
+
+        // Equipos y academias propios o de membresía, y las academias de los equipos vinculados.
+        fun refreshTeams() {
+            loadMyTeams(uid, { teams ->
+                if (removed) return@loadMyTeams
+                teams.forEach { listenAudience(it.id, it.type) }
+                val ownIds = teams.map { it.id }.toSet()
+                val academies = teams.filter { it.type == "EQUIPO" && it.academyId != null && it.academyId !in ownIds }
+                academies.distinctBy { it.academyId }.forEach { team ->
+                    openAcademy(team.academyId!!, team.id)
+                        .addOnSuccessListener { listenAudience(team.academyId, "ACADEMIA") }
+                        .addOnFailureListener { onError("No se pudo abrir la academia de ${team.name}") }
+                }
+            }, onError)
+        }
         registrations += firestore.collection("teamMemberships").whereEqualTo("userId", uid)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) onError(error.localizedMessage ?: "No se pudieron cargar tus equipos")
-                else {
-                    memberTeamIds = snapshot?.documents.orEmpty().mapNotNull { it.getString("teamId") }.toSet()
-                    refreshTeamListeners()
-                }
-            }
+            .addSnapshotListener { _, error -> if (error == null) refreshTeams() }
         registrations += firestore.collection("teams").whereEqualTo("createdBy", uid)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) onError(error.localizedMessage ?: "No se pudieron cargar tus equipos")
-                else {
-                    ownedTeamIds = snapshot?.documents.orEmpty().map { it.id }.toSet()
-                    refreshTeamListeners()
+            .addSnapshotListener { _, error -> if (error == null) refreshTeams() }
+
+        // Tutor: publicaciones EQUIPO de los equipos de sus jugadores vinculados (solo lectura).
+        if (auth.currentUser?.isEmailVerified == true) {
+            val childListeners = mutableMapOf<String, ListenerRegistration>()
+            registrations += firestore.collection("guardianLinks").whereEqualTo("guardianId", uid)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || removed) return@addSnapshotListener
+                    val children = snapshot?.documents.orEmpty().filter { it.getString("status") == "ACTIVE" }
+                        .mapNotNull { it.getString("playerId") }.toSet()
+                    (childListeners.keys - children).forEach { childListeners.remove(it)?.remove() }
+                    (children - childListeners.keys).forEach { child ->
+                        childListeners[child] = firestore.collection("teamMemberships").whereEqualTo("userId", child)
+                            .addSnapshotListener { memberships, failure ->
+                                if (failure != null || removed) return@addSnapshotListener
+                                memberships?.documents.orEmpty().mapNotNull { it.getString("teamId") }.distinct().forEach { teamId ->
+                                    AnnouncementRepository(firestore).openAsGuardian(teamId, child)
+                                        .addOnSuccessListener { listenAudience(teamId, "EQUIPO") }
+                                }
+                            }
+                    }
                 }
-            }
+            registrations += ListenerRegistration { childListeners.values.forEach(ListenerRegistration::remove) }
+        }
 
         return object : ListenerRegistration {
             override fun remove() {
+                removed = true
                 registrations.forEach(ListenerRegistration::remove)
-                teamRegistrations.values.forEach(ListenerRegistration::remove)
-                teamRegistrations.clear()
+                audienceRegistrations.values.forEach(ListenerRegistration::remove)
+                audienceRegistrations.clear()
             }
         }
     }

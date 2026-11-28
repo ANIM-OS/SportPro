@@ -350,15 +350,44 @@ service cloud.firestore {
     // =========================
     // US-18: COMUNIDAD
     // =========================
+    // Nombre visible del autor: "nombre apellido" de su users/{uid} (mismo cálculo que coachDisplayName,
+    // US-07) o "Usuario SportPro" si no lo tiene o pasa de 80. Nunca se deriva del correo.
+    function profileDisplayName() {
+      let u = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      let n = (u.get('firstName', '') + ' ' + u.get('lastName', '')).trim();
+      return n.size() > 0 && n.size() <= 80 ? n : 'Usuario SportPro';
+    }
+    function teamMember(teamId) {
+      return exists(/databases/$(database)/documents/teamMemberships/$(teamId + '_' + request.auth.uid));
+    }
+    // US-18: jugadores y entrenadores de un equipo vinculado a la academia (teams.academyId). Las reglas no
+    // pueden buscar: el usuario guarda academyAccess/{academyId}_{uid} con su equipo y aquí se revalida
+    // (exists() antes de get(): sin acceso → denegado limpio).
+    function academyMember(academyId) {
+      let path = /databases/$(database)/documents/academyAccess/$(academyId + '_' + request.auth.uid);
+      return exists(path)
+        && get(/databases/$(database)/documents/teams/$(get(path).data.teamId)).data.get('academyId', '') == academyId
+        && (ownsCallupTeam(get(path).data.teamId) || teamMember(get(path).data.teamId));
+    }
+    // Quién ve una publicación por su visibilidad. withGuardian: el tutor (vínculo ACTIVE, correo verificado
+    // y acceso announcementGuardians de US-17) lee las de EQUIPO del equipo de su jugador, pero no interactúa.
+    function postAudience(p, withGuardian) {
+      return p.visibility == 'TODOS'
+        || (p.visibility == 'EQUIPO' && p.get('teamId', null) is string
+          && (ownsCallupTeam(p.teamId) || teamMember(p.teamId) || (withGuardian && announcementGuardian(p.teamId))))
+        || (p.visibility == 'ACADEMIA' && p.get('teamId', null) is string
+          && (ownsCallupTeam(p.teamId) || academyMember(p.teamId)));
+    }
+
     match /communityPosts/{postId} {
 
+      // Lectura: activas y no ocultadas según su visibilidad; el autor ve las suyas aunque estén ocultas, y
+      // el moderador o el admin ven todas. Peor caso (tutor, EQUIPO): moderators, admins, teams,
+      // membresía, acceso, guardianLinks y membresía del jugador = 7 documentos (límite 10).
       allow read: if request.auth != null && (
-        resource.data.visibility == 'TODOS'
-        || resource.data.authorId == request.auth.uid
-        || (resource.data.visibility in ['EQUIPO', 'ACADEMIA']
-          && resource.data.teamId is string
-          && (get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid
-            || exists(/databases/$(database)/documents/teamMemberships/$(resource.data.teamId + '_' + request.auth.uid))))
+        resource.data.authorId == request.auth.uid
+        || canModerateCommunity()
+        || (resource.data.active == true && resource.data.moderated == false && postAudience(resource.data, true))
       );
 
       // Crear publicaciones
@@ -377,6 +406,9 @@ service cloud.firestore {
           'ENTRENADOR'
         ])
 
+        && request.resource.data.keys().hasAll([
+          'authorId', 'authorName', 'authorRole', 'content', 'visibility', 'createdAt', 'active', 'moderated'
+        ])
         // Solo permitimos estos campos
         && request.resource.data.keys().hasOnly([
           'authorId',
@@ -393,7 +425,8 @@ service cloud.firestore {
         // El autor debe ser el usuario autenticado
         && request.resource.data.authorId == request.auth.uid
 
-        && request.resource.data.authorName is string
+        // US-18: nombre del perfil (nunca del correo), de 1 a 80.
+        && request.resource.data.authorName == profileDisplayName()
 
         // Evita que el usuario se atribuya otro rol
         && request.resource.data.authorRole in [
@@ -425,7 +458,18 @@ service cloud.firestore {
 
         // Una publicación nueva siempre comienza activa
         && request.resource.data.active == true
-        && request.resource.data.moderated == false;
+        && request.resource.data.moderated == false
+
+        // US-18: TODOS sin teamId; EQUIPO/ACADEMIA con un teams existente del mismo tipo del que el autor
+        // es dueño o miembro (ACADEMIA: también miembro de un equipo vinculado con academyAccess).
+        // Peor caso (ACADEMIA): users, coachApprovals, teams, membresía, academyAccess y teams = 6.
+        && (request.resource.data.visibility == 'TODOS'
+          ? !request.resource.data.keys().hasAny(['teamId'])
+          : (request.resource.data.teamId is string
+            && exists(/databases/$(database)/documents/teams/$(request.resource.data.teamId))
+            && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.type == request.resource.data.visibility
+            && (ownsCallupTeam(request.resource.data.teamId) || teamMember(request.resource.data.teamId)
+              || (request.resource.data.visibility == 'ACADEMIA' && academyMember(request.resource.data.teamId)))));
 
       // Un moderador designado o un administrador puede ocultar una publicación sin alterar su contenido.
       allow update: if request.auth != null
@@ -435,23 +479,25 @@ service cloud.firestore {
         && request.resource.data.moderated == true;
       allow delete: if false;
 
-      // US-19: permitir interacciones SOLO con publicaciones visibles y activas.
+      // US-19: comentar, reaccionar y reportar SOLO en publicaciones activas, no ocultadas y visibles
+      // (misma audiencia que la lectura, sin el tutor: el tutor solo lee).
       function canInteractWithPost() {
         let path = /databases/$(database)/documents/communityPosts/$(postId);
         let post = get(path).data;
         return request.auth != null && exists(path)
           && post.active == true && post.moderated == false
-          && (
-            post.visibility == 'TODOS'
-            || post.authorId == request.auth.uid
-            || (post.visibility in ['EQUIPO', 'ACADEMIA']
-              && post.get('teamId', '') is string
-              && exists(/databases/$(database)/documents/teams/$(post.teamId))
-              && (
-                get(/databases/$(database)/documents/teams/$(post.teamId)).data.createdBy == request.auth.uid
-                || exists(/databases/$(database)/documents/teamMemberships/$(post.teamId + '_' + request.auth.uid))
-              ))
-          );
+          && (post.authorId == request.auth.uid || postAudience(post, false));
+      }
+
+      // US-18: leer comentarios y reacciones = poder leer la publicación (post activo y no ocultado salvo
+      // para su autor, moderadores y admin). Peor caso (tutor): post, moderators, admins, teams,
+      // membresía, acceso, guardianLinks y membresía del jugador = 8.
+      function canReadPostContent() {
+        let path = /databases/$(database)/documents/communityPosts/$(postId);
+        let post = get(path).data;
+        return request.auth != null && exists(path)
+          && (post.authorId == request.auth.uid || canModerateCommunity()
+            || (post.active == true && post.moderated == false && postAudience(post, true)));
       }
 
       function canModerateCommunity() {
@@ -463,9 +509,9 @@ service cloud.firestore {
 
       match /comments/{commentId} {
         // Las consultas deben filtrar moderated == false.
-        allow get: if canInteractWithPost()
+        allow get: if canReadPostContent()
           && (resource.data.moderated == false || canModerateCommunity());
-        allow list: if canInteractWithPost() && resource.data.moderated == false;
+        allow list: if canReadPostContent() && resource.data.moderated == false;
 
         allow create: if canInteractWithPost()
           && request.resource.data.keys().hasAll([
@@ -510,7 +556,7 @@ service cloud.firestore {
       }
 
       match /likes/{userId} {
-        allow read: if canInteractWithPost();
+        allow read: if canReadPostContent();
         allow create: if canInteractWithPost()
           && userId == request.auth.uid
           && request.resource.data.keys().hasAll(['userId', 'createdAt'])
@@ -520,6 +566,20 @@ service cloud.firestore {
         allow update: if false;
         allow delete: if canInteractWithPost() && userId == request.auth.uid;
       }
+    }
+
+    // US-18: acceso a las publicaciones de una academia de quien pertenece a un equipo vinculado.
+    match /academyAccess/{accessId} {
+      allow read, delete: if request.auth != null && accessId == resource.data.academyId + '_' + request.auth.uid;
+      allow create, update: if request.auth != null
+        && request.resource.data.keys().hasAll(['academyId', 'teamId', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['academyId', 'teamId', 'updatedAt'])
+        && request.resource.data.academyId is string && request.resource.data.teamId is string
+        && accessId == request.resource.data.academyId + '_' + request.auth.uid
+        && request.resource.data.updatedAt == request.time
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.get('academyId', '') == request.resource.data.academyId
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.academyId)).data.type == 'ACADEMIA'
+        && (ownsCallupTeam(request.resource.data.teamId) || teamMember(request.resource.data.teamId));
     }
 
     match /moderators/{moderatorId} {
