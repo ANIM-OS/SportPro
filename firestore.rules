@@ -617,7 +617,16 @@ service cloud.firestore {
     // Vigente o vencido se calcula en la app con deadline (plan Spark, sin Cloud Functions).
     // =========================
     match /tryoutNotices/{noticeId} {
-      allow read: if request.auth != null;
+      function canModerateTryouts() {
+        return isAdmin() || exists(/databases/$(database)/documents/moderators/$(request.auth.uid));
+      }
+      // US-20: los vigentes (ACTIVE) los lee cualquiera con sesión; los cancelados solo su autor, el admin
+      // y los moderadores. Consultas del cliente: status == ACTIVE, o authorId == uid ("Mis avisos").
+      allow read: if request.auth != null && (
+        resource.data.status == 'ACTIVE'
+        || resource.data.authorId == request.auth.uid
+        || canModerateTryouts()
+      );
 
       allow create: if isApprovedCoach()
         && request.resource.data.keys().hasAll([
@@ -628,9 +637,8 @@ service cloud.firestore {
           'tryoutDate', 'location', 'deadline', 'status', 'createdAt'
         ])
         && request.resource.data.authorId == request.auth.uid
-        && request.resource.data.authorName is string
-        && request.resource.data.authorName.size() > 0
-        && request.resource.data.authorName.size() <= 100
+        // US-20: nombre del perfil o "Usuario SportPro" (misma función que la comunidad), nunca el correo.
+        && request.resource.data.authorName == profileDisplayName()
         && request.resource.data.title is string
         && request.resource.data.title.size() > 0
         && request.resource.data.title.size() <= 100
@@ -650,25 +658,29 @@ service cloud.firestore {
           || (request.resource.data.location is string
             && request.resource.data.location.size() > 0
             && request.resource.data.location.size() <= 120))
+        // US-20: la prueba no puede ser anterior a hoy (margen de 1 día: se guarda al inicio del día en Lima)
         && (!request.resource.data.keys().hasAny(['tryoutDate'])
-          || request.resource.data.tryoutDate is timestamp)
+          || (request.resource.data.tryoutDate is timestamp
+            && request.resource.data.tryoutDate >= request.time - duration.value(1, 'd')))
         // No se puede publicar un aviso ya vencido
         && (!request.resource.data.keys().hasAny(['deadline'])
           || (request.resource.data.deadline is timestamp
             && request.resource.data.deadline > request.time))
-        // La app exige fecha límite <= día de la prueba; el margen cubre zonas horarias
+        // Fecha límite (23:59:59 en Lima) a más tardar el día de la prueba (inicio del día en Lima + 1 día)
         && (!request.resource.data.keys().hasAll(['deadline', 'tryoutDate'])
-          || request.resource.data.deadline <= request.resource.data.tryoutDate + duration.value(2, 'd'))
+          || request.resource.data.deadline <= request.resource.data.tryoutDate + duration.value(1, 'd'))
         && request.resource.data.status == 'ACTIVE'
         && request.resource.data.createdAt == request.time;
 
-      // Solo se puede cancelar: lo hace el autor (aunque ya no esté aprobado) o un administrador.
+      // Solo se puede cancelar (irreversible): el autor (aunque ya no esté aprobado), el admin o un
+      // moderador. cancelledBy guarda quién lo hizo ("Cancelado por moderación" si no es el autor).
       allow update: if request.auth != null
-        && (resource.data.authorId == request.auth.uid || isAdmin())
+        && (resource.data.authorId == request.auth.uid || canModerateTryouts())
         && resource.data.status == 'ACTIVE'
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt', 'cancelledBy'])
         && request.resource.data.status == 'CANCELLED'
-        && request.resource.data.cancelledAt == request.time;
+        && request.resource.data.cancelledAt == request.time
+        && request.resource.data.cancelledBy == request.auth.uid;
 
       allow delete: if false;
     }

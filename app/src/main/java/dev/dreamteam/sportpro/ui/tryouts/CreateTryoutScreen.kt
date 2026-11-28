@@ -1,5 +1,6 @@
 package dev.dreamteam.sportpro.ui.tryouts
 
+import dev.dreamteam.sportpro.domain.tryouts.tryoutToday
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -57,7 +58,7 @@ fun CreateTryoutScreen(
     var submitted by remember { mutableStateOf(false) }
 
     val errors = if (submitted) {
-        validateTryout(title, description, location, tryoutDate, deadline, LocalDate.now())
+        validateTryout(title, description, location, tryoutDate, deadline, tryoutToday())
     } else {
         TryoutFormErrors()
     }
@@ -124,7 +125,7 @@ fun CreateTryoutScreen(
             )
         }
 
-        uiState.publishError?.let { Text(it, color = Color(0xFFFF5252), fontSize = 13.sp) }
+        uiState.publishError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(
@@ -137,7 +138,7 @@ fun CreateTryoutScreen(
             Button(
                 onClick = {
                     submitted = true
-                    val currentErrors = validateTryout(title, description, location, tryoutDate, deadline, LocalDate.now())
+                    val currentErrors = validateTryout(title, description, location, tryoutDate, deadline, tryoutToday())
                     if (!currentErrors.hasErrors) {
                         viewModel.publish(
                             TryoutDraft(title, description, category, position, tryoutDate, location, deadline)
@@ -152,9 +153,9 @@ fun CreateTryoutScreen(
                 )
             ) {
                 if (uiState.isPublishing) {
-                    CircularProgressIndicator(color = Color.White, modifier = Modifier.height(20.dp))
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.height(20.dp))
                 } else {
-                    Text("PUBLICAR", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("PUBLICAR", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold)
                 }
             }
         }

@@ -10,6 +10,11 @@ import dev.dreamteam.sportpro.domain.tryouts.startOfDayMillis
 import dev.dreamteam.sportpro.domain.tryouts.state
 import dev.dreamteam.sportpro.domain.tryouts.toDatePickerMillis
 import dev.dreamteam.sportpro.domain.tryouts.validateTryout
+import dev.dreamteam.sportpro.domain.tryouts.TRYOUT_ZONE
+import dev.dreamteam.sportpro.domain.tryouts.canCancel
+import dev.dreamteam.sportpro.domain.tryouts.cancelledByModeration
+import dev.dreamteam.sportpro.domain.tryouts.epochMillisToDate
+import dev.dreamteam.sportpro.domain.tryouts.tryoutToday
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -93,6 +98,43 @@ class TryoutRulesTest {
         assertNotNull(errors.title)
         assertNotNull(errors.description)
         assertNotNull(errors.location)
+    }
+
+    /** US-20: zona fija America/Lima y fin del día a las 23:59:59, sin depender del celular. */
+    @Test
+    fun limaZone_endOfDayAt235959_andDefaults() {
+        assertEquals(lima, TRYOUT_ZONE)
+        val end = day.endOfDayMillis()
+        assertEquals(day.atTime(23, 59, 59).atZone(lima).toInstant().toEpochMilli(), end)
+        assertEquals(TryoutState.VIGENTE, TryoutNotice(deadlineMillis = end).state(end))
+        assertEquals(TryoutState.VENCIDO, TryoutNotice(deadlineMillis = end).state(end + 1))
+        assertEquals(day.startOfDayMillis(lima), day.startOfDayMillis())
+        // 03:00 UTC del 21 = 22:00 del 20 en Lima: "hoy" y las fechas mostradas son las de Lima.
+        val utc3 = java.time.LocalDateTime.of(2026, 11, 21, 3, 0).atZone(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
+        assertEquals(day, tryoutToday(utc3))
+        assertEquals(day, epochMillisToDate(utc3))
+        // Fecha límite el día de la prueba: dentro del margen de las reglas (inicio del día + 1 día).
+        assertTrue(day.endOfDayMillis() <= day.startOfDayMillis() + 24 * 3_600_000L)
+    }
+
+    @Test
+    fun cancel_authorOrModerator_onlyWhileCurrent() {
+        val notice = TryoutNotice(authorId = "coach", deadlineMillis = day.endOfDayMillis(lima))
+        val now = day.startOfDayMillis(lima)
+        assertTrue(notice.canCancel("coach", isModerator = false, nowMillis = now))
+        assertTrue(notice.canCancel("mod", isModerator = true, nowMillis = now))
+        assertFalse(notice.canCancel("otro", isModerator = false, nowMillis = now))
+        assertFalse(notice.canCancel(null, isModerator = true, nowMillis = now))
+        assertFalse(notice.canCancel("coach", isModerator = false, nowMillis = day.plusDays(1).startOfDayMillis(lima)))
+        assertFalse(notice.copy(status = TRYOUT_CANCELLED).canCancel("coach", isModerator = false, nowMillis = now))
+    }
+
+    @Test
+    fun cancelledByModeration_whenNotTheAuthor() {
+        assertTrue(TryoutNotice(authorId = "coach", status = TRYOUT_CANCELLED, cancelledBy = "mod").cancelledByModeration())
+        assertFalse(TryoutNotice(authorId = "coach", status = TRYOUT_CANCELLED, cancelledBy = "coach").cancelledByModeration())
+        assertFalse(TryoutNotice(authorId = "coach", status = TRYOUT_CANCELLED).cancelledByModeration())
+        assertFalse(TryoutNotice(authorId = "coach", cancelledBy = "mod").cancelledByModeration())
     }
 
     @Test
