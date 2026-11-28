@@ -10,6 +10,7 @@ import com.google.firebase.firestore.Source
 
 /**
  * Borrado en cascada de un partido: alineación (jugadores, posiciones, accesos de tutores y documento),
+ * eventos con su historial (US-13/14),
  * respuestas de disponibilidad, convocatorias y, al final, el partido.
  * Lo usan "Cancelar partido" (US-09) y la eliminación de equipos (US-03).
  */
@@ -37,7 +38,11 @@ class MatchCleanup(
                 .whereEqualTo("ownerId", ownerId).whereEqualTo("matchId", fixture.id).limit(100)
                 .get(Source.SERVER).addOnSuccessListener { snapshot ->
                     if (snapshot.isEmpty) {
-                        fixture.delete().addOnSuccessListener { done() }.addOnFailureListener(failed)
+                        // Eventos y su historial (US-13/14, D2): solo existen en partidos ya iniciados, así que
+                        // en la práctica solo los borra la eliminación del equipo (cancelar es solo para futuros).
+                        dev.dreamteam.sportpro.data.repository.FirestoreMatchEventStore.deleteMatchEvents(firestore, fixture.id, {
+                            fixture.delete().addOnSuccessListener { done() }.addOnFailureListener(failed)
+                        }, failed)
                     } else {
                         val responses = snapshot.documents.map { selection ->
                             firestore.collection("matchAvailability").document(selection.id).get(Source.SERVER)

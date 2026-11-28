@@ -57,6 +57,21 @@ service cloud.firestore {
         && resource.data.get('responseDeadline', resource.data.kickoff) > request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['opponent', 'kickoff', 'responseDeadline', 'updatedAt']);
       allow delete: if ownsCallupTeam(resource.data.teamId);
+      // US-13/14: eventos del partido y su historial (revisions/{version}). Solo la dueña aprobada
+      // escribe, con tipos activos del catálogo de ESE equipo y dentro del plazo; nadie anula borrando.
+      match /events/{eventId} {
+        allow read: if eventReader(matchId);
+        allow create: if eventWriter(matchId) && validNewEvent(matchId, eventId);
+        allow update: if eventWriter(matchId) && validEventChange(matchId, eventId);
+        // D2: solo para la cascada al eliminar el equipo (US-03); la app nunca borra un evento suelto.
+        allow delete: if request.auth != null && ownsCallupTeam(eventFixture(matchId).teamId);
+        match /revisions/{rev} {
+          allow read: if eventReader(matchId);
+          allow create: if eventWriter(matchId) && validEventRevision(matchId, eventId, rev);
+          allow update: if false;
+          allow delete: if request.auth != null && ownsCallupTeam(eventFixture(matchId).teamId);
+        }
+      }
     }
     match /matchCallupPlayers/{selectionId} {
       allow read: if request.auth != null && (
@@ -861,6 +876,119 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.createdBy == request.auth.uid;
     }
 
+
+    // =========================
+    // US-13/14: EVENTOS DEL PARTIDO (matchFixtures/{matchId}/events/{eventId}/revisions/{version})
+    // =========================
+    // Leen: la dueña, los jugadores convocados (selected == true) a ESE partido, el tutor con el acceso
+    // de US-11 (lineupGuardian) y el admin. Escribe la dueña aprobada: registrar desde el inicio hasta
+    // 24 h después; corregir y anular hasta 7 días después. Cada escritura va en batch con su revisión
+    // (el batch permite 20 lecturas de reglas). Anular = voided, nunca borrar.
+    function eventFixture(matchId) {
+      return get(/databases/$(database)/documents/matchFixtures/$(matchId)).data;
+    }
+    function eventReader(matchId) {
+      let fixture = eventFixture(matchId);
+      return request.auth != null && (ownsCallupTeam(fixture.teamId)
+        || get(/databases/$(database)/documents/matchCallupPlayers/$(matchId + '_' + request.auth.uid)).data.selected == true
+        || isAdmin() || lineupGuardian(matchId));
+    }
+    function eventWriter(matchId) {
+      return request.auth != null && callupOwnsTeam(eventFixture(matchId).teamId);
+    }
+    function calledUp(matchId, playerId) {
+      return playerId is string
+        && get(/databases/$(database)/documents/matchCallupPlayers/$(matchId + '_' + playerId)).data.selected == true;
+    }
+    // Tipo propio del equipo (eq_…) o general del catálogo.
+    function eventTypeDoc(teamId, typeId) {
+      return typeId.matches('^eq_.*')
+        ? get(/databases/$(database)/documents/teams/$(teamId)/eventTypes/$(typeId)).data
+        : get(/databases/$(database)/documents/eventCatalog/$(typeId)).data;
+    }
+    // Activo en ESE equipo: propio activo, o general activo que el equipo no desactivó (US-12).
+    function eventTypeActive(teamId, typeId) {
+      return typeId.matches('^eq_.*')
+        ? (eventTypeDoc(teamId, typeId).kind == 'CUSTOM' && eventTypeDoc(teamId, typeId).active == true)
+        : (eventTypeDoc(teamId, typeId).active == true
+          && (!exists(/databases/$(database)/documents/teams/$(teamId)/eventTypes/$(typeId))
+            || get(/databases/$(database)/documents/teams/$(teamId)/eventTypes/$(typeId)).data.active == true));
+    }
+    function eventRequired(d, type) {
+      return d.keys().hasAll(type.requiredCore) && d.extras.keys().hasAll(type.requiredExtra);
+    }
+    // Campos y valores. Sale/Entra: convocados vigentes y distintos (las reglas no recorren el mapa extras).
+    function validEventData(matchId, d, fixture) {
+      return d.keys().hasAll(['typeId', 'typeName', 'extras', 'extraNames', 'teamId', 'category', 'voided', 'version',
+          'createdBy', 'createdAt', 'clientCreatedAt', 'updatedBy', 'updatedAt'])
+        && d.keys().hasOnly(['typeId', 'typeName', 'minute', 'team', 'playerId', 'playerName', 'notes', 'extras', 'extraNames',
+          'teamId', 'category', 'voided', 'voidedBy', 'voidedAt', 'version', 'createdBy', 'createdAt', 'clientCreatedAt',
+          'updatedBy', 'updatedAt'])
+        && d.typeId is string && d.typeId.matches('^[a-z0-9_]{2,40}$')
+        && d.typeName is string && d.typeName.size() > 0 && d.typeName.size() <= 40
+        && (!('minute' in d) || (d.minute is int && d.minute >= 0 && d.minute <= 130))
+        && (!('team' in d) || d.team in ['OWN', 'OPPONENT'])
+        && (!('playerId' in d) || (d.get('team', '') == 'OWN' && calledUp(matchId, d.playerId)))
+        && (!('playerName' in d) || ('playerId' in d && d.playerName is string && d.playerName.size() > 0 && d.playerName.size() <= 80))
+        && (!('notes' in d) || (d.notes is string && d.notes.size() > 0 && d.notes.size() <= 500))
+        && d.extras is map && d.extras.size() <= 6 && d.extraNames is map && d.extraNames.size() <= 6
+        && d.extras.keys().hasAll(d.extraNames.keys())
+        && (!('sale' in d.extras) || calledUp(matchId, d.extras.sale))
+        && (!('entra' in d.extras) || calledUp(matchId, d.extras.entra))
+        && (!('sale' in d.extras) || !('entra' in d.extras) || d.extras.sale != d.extras.entra)
+        && d.teamId == fixture.teamId && d.category == fixture.category
+        && d.version is int && d.clientCreatedAt is timestamp;
+    }
+    function validNewEvent(matchId, eventId) {
+      let d = request.resource.data;
+      let fixture = eventFixture(matchId);
+      return validEventData(matchId, d, fixture)
+        && request.time >= fixture.kickoff && request.time < fixture.kickoff + duration.value(24, 'h')
+        && eventTypeActive(fixture.teamId, d.typeId) && eventRequired(d, eventTypeDoc(fixture.teamId, d.typeId))
+        && d.voided == false && !d.keys().hasAny(['voidedBy', 'voidedAt']) && d.version == 1
+        && d.createdBy == request.auth.uid && d.createdAt == request.time
+        && d.updatedBy == request.auth.uid && d.updatedAt == request.time
+        && getAfter(/databases/$(database)/documents/matchFixtures/$(matchId)/events/$(eventId)/revisions/1).data.action == 'CREATE';
+    }
+    // Corregir (vuelve a validar datos, tipo si cambia y obligatorios) o anular (solo voided y su autoría).
+    function validEventChange(matchId, eventId) {
+      let d = request.resource.data;
+      let old = resource.data;
+      let fixture = eventFixture(matchId);
+      return request.time < fixture.kickoff + duration.value(7, 'd')
+        && old.voided == false && d.version == old.version + 1
+        && d.createdBy == old.createdBy && d.createdAt == old.createdAt && d.clientCreatedAt == old.clientCreatedAt
+        && d.teamId == old.teamId && d.category == old.category
+        && d.updatedBy == request.auth.uid && d.updatedAt == request.time
+        && getAfter(/databases/$(database)/documents/matchFixtures/$(matchId)/events/$(eventId)/revisions/$(string(d.version))).data.action
+          == (d.voided == true ? 'VOID' : 'CORRECTION')
+        && (d.voided == true
+          ? (d.diff(old).affectedKeys().hasOnly(['voided', 'voidedBy', 'voidedAt', 'version', 'updatedBy', 'updatedAt'])
+            && d.voidedBy == request.auth.uid && d.voidedAt == request.time)
+          : (validEventData(matchId, d, fixture) && !d.keys().hasAny(['voidedBy', 'voidedAt'])
+            && (d.typeId == old.typeId || eventTypeActive(fixture.teamId, d.typeId))
+            && eventRequired(d, eventTypeDoc(fixture.teamId, d.typeId))));
+    }
+    // previous = campos editables del evento ANTES del cambio (valor anterior consultable, US-14).
+    function samePrevious(p, e) {
+      return p.keys().hasOnly(['typeId', 'typeName', 'minute', 'team', 'playerId', 'playerName', 'notes', 'extras', 'extraNames', 'voided'])
+        && p.typeId == e.typeId && p.typeName == e.typeName
+        && p.get('minute', null) == e.get('minute', null) && p.get('team', null) == e.get('team', null)
+        && p.get('playerId', null) == e.get('playerId', null) && p.get('playerName', null) == e.get('playerName', null)
+        && p.get('notes', null) == e.get('notes', null)
+        && p.extras == e.extras && p.extraNames == e.extraNames && p.voided == e.voided;
+    }
+    function validEventRevision(matchId, eventId, rev) {
+      let r = request.resource.data;
+      let path = /databases/$(database)/documents/matchFixtures/$(matchId)/events/$(eventId);
+      return r.keys().hasAll(['action', 'previous', 'by', 'at']) && r.keys().hasOnly(['action', 'previous', 'by', 'at'])
+        && r.by == request.auth.uid && r.at == request.time && r.previous is map
+        && rev == string(getAfter(path).data.version)
+        && ((r.action == 'CREATE' && rev == '1' && !exists(path) && r.previous.size() == 0)
+          || (r.action in ['CORRECTION', 'VOID'] && exists(path)
+            && getAfter(path).data.version == get(path).data.version + 1
+            && samePrevious(r.previous, get(path).data)));
+    }
 
     // =========================
     // US-12: CATÁLOGO DE EVENTOS

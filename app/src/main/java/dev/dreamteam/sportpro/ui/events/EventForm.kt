@@ -23,17 +23,23 @@ import dev.dreamteam.sportpro.data.repository.MatchLineupRepository
 import dev.dreamteam.sportpro.data.repository.TeamDirectoryRepository
 import dev.dreamteam.sportpro.ui.callups.CallupRepository
 
-/** Cómo se muestran equipo, jugador y datos extra de un evento (nombres reales, no códigos ni uid). */
+/**
+ * Cómo se muestran equipo, jugador y datos extra de un evento (nombres, no códigos ni uid).
+ * [playerNames] son los nombres que el rol puede ver (MatchEvents.visibleNames); los demás jugadores
+ * se muestran como [unknownPlayer] ("Jugador" para el admin, "Compañero" para el tutor).
+ */
 data class EventLabels(
     val ownName: String = "",
     val opponent: String = "",
     val playerNames: Map<String, String> = emptyMap(),
-    val extraLabels: Map<String, String> = emptyMap()
+    val extraLabels: Map<String, String> = emptyMap(),
+    val unknownPlayer: String = "Jugador"
 ) {
     fun team(code: String?) = MatchEvents.teamLabel(code, ownName, opponent)
-    fun player(id: String?) = if (id.isNullOrBlank()) "Sin especificar" else playerNames[id] ?: "Jugador"
+    fun player(id: String?) = if (id.isNullOrBlank()) "Sin especificar" else playerNames[id] ?: unknownPlayer
     fun extraLabel(key: String) = extraLabels[key] ?: EventCatalogRules.humanize(key)
-    fun extraValue(value: String) = playerNames[value] ?: value
+    /** [isPlayer]: el dato es un jugador (tiene copia en extraNames); si no, se muestra tal cual. */
+    fun extraValue(value: String, isPlayer: Boolean) = if (isPlayer) player(value) else value
 }
 
 val LocalEventLabels = staticCompositionLocalOf { EventLabels() }
@@ -69,15 +75,30 @@ class EventFormState(initial: MatchEventRecord? = null) {
     var notes by mutableStateOf(initial?.notes.orEmpty())
     val extras = mutableStateMapOf<String, String>().apply { initial?.extraFields?.let { putAll(it) } }
 
-    /** Evento listo para guardar (nuevo si [base] es null; si no, la corrección de [base]). */
-    fun toRecord(ctx: MatchEventContext, type: EventType, actorId: String, base: MatchEventRecord?): MatchEventRecord {
+    /** Precarga el formulario con un evento que llegó del servidor (corregir). */
+    fun load(record: MatchEventRecord) {
+        typeId = record.typeId; minute = record.minute?.toString().orEmpty(); team = record.team.orEmpty()
+        playerId = record.playerId.orEmpty(); notes = record.notes
+        extras.clear(); extras.putAll(record.extraFields)
+    }
+
+    /**
+     * Evento listo para guardar (nuevo si [base] es null; si no, la corrección de [base]). Copia los
+     * nombres del jugador y de los datos extra de clase "player" ([names] = plantilla de la dueña).
+     */
+    fun toRecord(ctx: MatchEventContext, type: EventType, actorId: String, base: MatchEventRecord?, names: Map<String, String> = emptyMap()): MatchEventRecord {
         val validKeys = type.extraFields.map { it.key }.toSet()
         val fields = extras.filterKeys { it in validKeys }.filterValues { it.isNotBlank() }
+        val player = playerId.takeIf { it.isNotBlank() && team == EventTeams.OWN }
+        val playerFields = type.extraFields.filter { MatchEvents.isPlayerField(type.id, it) }.map { it.key }.toSet()
+        val extraNames = fields.filterKeys { it in playerFields }.mapNotNull { (key, id) ->
+            (names[id] ?: base?.extraNames?.get(key)?.takeIf { base.extraFields[key] == id })?.let { key to it.take(80) }
+        }.toMap()
         val record = MatchEventRecord(matchId = ctx.matchId, teamId = ctx.teamId, typeId = type.id, typeName = type.name,
-            minute = minute.toIntOrNull(), team = team.ifBlank { null },
-            playerId = playerId.takeIf { it.isNotBlank() && team == EventTeams.OWN },
-            notes = notes.trim(), extraFields = fields, authorId = actorId)
-        return base?.let { record.copy(id = it.id, authorId = it.authorId, createdAtMillis = it.createdAtMillis) } ?: record
+            minute = minute.toIntOrNull(), team = team.ifBlank { null }, playerId = player,
+            playerName = player?.let { id -> (names[id] ?: base?.playerName?.takeIf { base.playerId == id })?.take(80) },
+            notes = notes.trim(), extraFields = fields, extraNames = extraNames, authorId = actorId)
+        return base?.let { record.copy(id = it.id, authorId = it.authorId, createdAtMillis = it.createdAtMillis, version = it.version) } ?: record
     }
 }
 
@@ -122,8 +143,12 @@ fun EventFormFields(state: EventFormState, types: List<EventType>, ctx: MatchEve
         type?.extraFields?.forEach { field ->
             val label = field.label + if (field.required) " *" else " (opcional)"
             when {
-                MatchEvents.isPlayerField(type.id, field) ->
-                    PlayerPicker(label, state.extras[field.key].orEmpty(), players, enabled = true) { state.extras[field.key] = it }
+                MatchEvents.isPlayerField(type.id, field) -> {
+                    // Cambio: quien sale no puede ser quien entra (también lo exigen las reglas).
+                    val other = when (field.key) { "sale" -> state.extras["entra"]; "entra" -> state.extras["sale"]; else -> null }
+                    PlayerPicker(label, state.extras[field.key].orEmpty(), players.copy(options = players.options.filter { it.id != other }),
+                        enabled = true) { state.extras[field.key] = it }
+                }
                 field.kind == ExtraKinds.CHOICE -> {
                     Text(label)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
