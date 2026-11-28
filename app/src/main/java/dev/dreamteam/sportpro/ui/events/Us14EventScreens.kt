@@ -19,6 +19,10 @@ import androidx.compose.ui.unit.sp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import org.json.JSONObject
+import dev.dreamteam.sportpro.data.model.EventType
+import dev.dreamteam.sportpro.data.model.MatchEventContext
+import dev.dreamteam.sportpro.data.model.MatchEventRecord
+import dev.dreamteam.sportpro.data.model.MatchEvents
 import dev.dreamteam.sportpro.data.repository.*
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -203,17 +207,27 @@ private fun RecordSummary14(
                 fontWeight = FontWeight.Bold
             )
 
+            val labels = LocalEventLabels.current
+
             Text(
-                text = "Equipo: ${record.team ?: "Sin especificar"}",
+                text = "Equipo: ${labels.team(record.team)}",
                 color = Muted14,
                 fontSize = 12.sp
             )
 
             Text(
-                text = "Jugador: ${record.player ?: "Sin especificar"}",
+                text = "Jugador: ${labels.player(record.playerId)}",
                 color = Muted14,
                 fontSize = 12.sp
             )
+
+            record.extraFields.forEach { (key, value) ->
+                Text(
+                    text = "${labels.extraLabel(key)}: ${labels.extraValue(value)}",
+                    color = Muted14,
+                    fontSize = 12.sp
+                )
+            }
 
             if (record.notes.isNotBlank()) {
                 Text(
@@ -432,269 +446,63 @@ fun EventDetailScreen(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+/**
+ * US-14: corregir un evento del partido real. Usa el mismo formulario que el registro (tipos activos
+ * del catálogo del equipo, equipo nuestro/rival y convocados). El valor anterior queda en el historial.
+ */
 @Composable
 fun EventEditScreen(
-    matchId: String,
+    ctx: MatchEventContext,
     eventId: String,
     onBack: () -> Unit,
     onSaved: () -> Unit
 ) {
     val context = LocalContext.current
-
-    val repo = remember(context) {
-        LiveEventRepository(context)
-    }
-
-    val catalog = remember {
-        EventCatalogFirestoreRepository()
-    }
-
-    val original = remember(matchId, eventId) {
-        repo.find(matchId, eventId)
-    }
-
-    // US-12: tipos activos del catálogo en Firestore (globales mientras el partido no tenga equipo).
-    // El tipo original se sigue ofreciendo aunque se haya desactivado.
-    var activeCatalog by remember {
-        mutableStateOf<List<dev.dreamteam.sportpro.data.model.EventType>>(emptyList())
-    }
-    DisposableEffect(Unit) {
-        val listener = catalog.listenActive(null) { activeCatalog = it }
+    val repo = remember(context) { LiveEventRepository(context) }
+    val catalog = remember { EventCatalogFirestoreRepository() }
+    val original = remember(ctx.matchId, eventId) { repo.find(ctx.matchId, eventId) }
+    var activeCatalog by remember { mutableStateOf<List<EventType>>(emptyList()) }
+    DisposableEffect(ctx.teamId) {
+        val listener = catalog.listenActive(ctx.teamId) { activeCatalog = it }
         onDispose { listener.remove() }
     }
+    // El tipo original se sigue ofreciendo aunque se haya desactivado en el catálogo.
     val allTypes = activeCatalog + listOfNotNull(original?.takeIf { o -> activeCatalog.none { it.id == o.typeId } }
-        ?.let { dev.dreamteam.sportpro.data.model.EventType(it.typeId, it.typeName, active = false) })
+        ?.let { EventType(it.typeId, it.typeName, active = false) })
+    val players = rememberMatchPlayers(ctx)
+    val state = remember(eventId) { EventFormState(original) }
+    var error by remember { mutableStateOf<String?>(null) }
 
-    var typeId by remember {
-        mutableStateOf(original?.typeId.orEmpty())
-    }
-
-    var minute by remember {
-        mutableStateOf(original?.minute?.toString().orEmpty())
-    }
-
-    var team by remember {
-        mutableStateOf(original?.team.orEmpty())
-    }
-
-    var player by remember {
-        mutableStateOf(original?.player.orEmpty())
-    }
-
-    var notes by remember {
-        mutableStateOf(original?.notes.orEmpty())
-    }
-
-    var error by remember {
-        mutableStateOf<String?>(null)
-    }
-
-    val match = demoMatchesUs13.firstOrNull {
-        it.id == matchId
-    }
-
-    Us14Container(
-        title = "CORREGIR EVENTO",
-        onBack = onBack
-    ) {
+    Us14Container(title = "CORREGIR EVENTO", onBack = onBack) {
         if (original == null) {
-            Text(
-                text = "El evento no existe.",
-                color = MaterialTheme.colorScheme.error
-            )
+            Text(text = "El evento no existe.", color = MaterialTheme.colorScheme.error)
         } else if (original.voided) {
-            Text(
-                text = "Los eventos anulados no se pueden corregir.",
-                color = MaterialTheme.colorScheme.error
-            )
+            Text(text = "Los eventos anulados no se pueden corregir.", color = MaterialTheme.colorScheme.error)
         } else {
-            Text(
-                text = "Valor original (se conservará en el historial)",
-                color = Orange14,
-                fontWeight = FontWeight.Bold
-            )
-
+            Text(text = "Valor original (se conservará en el historial)", color = Orange14, fontWeight = FontWeight.Bold)
             RecordSummary14(original)
-
-            Text(
-                text = "TIPO DE EVENTO",
-                color = Color.White,
-                fontWeight = FontWeight.Bold
-            )
-
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                allTypes
-                    .filter {
-                        it.active || it.id == original.typeId
-                    }
-                    .forEach { type ->
-                        FilterChip(
-                            selected = type.id == typeId,
-                            onClick = {
-                                typeId = type.id
-                            },
-                            label = {
-                                Text(
-                                    text = type.name,
-                                    fontSize = 11.sp
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Orange14,
-                                selectedLabelColor = Color.White
-                            )
-                        )
-                    }
+            Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(12.dp)) {
+                Column(Modifier.fillMaxWidth().padding(14.dp)) { EventFormFields(state, allTypes, ctx, players) }
             }
-
-            OutlinedTextField(
-                value = minute,
-                onValueChange = {
-                    if (
-                        it.length <= 3 &&
-                        it.all(Char::isDigit)
-                    ) {
-                        minute = it
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                label = {
-                    Text("Minuto (opcional)")
-                },
-                singleLine = true
-            )
-
-            Text(
-                text = "EQUIPO",
-                color = Color.White,
-                fontSize = 12.sp
-            )
-
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                listOf(
-                    match?.homeTeam ?: "Local",
-                    match?.awayTeam ?: "Visitante",
-                    ""
-                ).forEach { value ->
-                    FilterChip(
-                        selected = team == value,
-                        onClick = {
-                            team = value
-                        },
-                        label = {
-                            Text(
-                                value.ifBlank {
-                                    "Sin especificar"
-                                }
-                            )
-                        }
-                    )
-                }
-            }
-
-            OutlinedTextField(
-                value = player,
-                onValueChange = {
-                    player = it
-                },
-                modifier = Modifier.fillMaxWidth(),
-                label = {
-                    Text("Jugador (opcional)")
-                }
-            )
-
-            OutlinedTextField(
-                value = notes,
-                onValueChange = {
-                    notes = it
-                },
-                modifier = Modifier.fillMaxWidth(),
-                label = {
-                    Text("Observaciones")
-                },
-                minLines = 3
-            )
-
-            Text(
-                text = "Los demás campos personalizados se conservan sin cambios.",
-                fontSize = 11.sp,
-                color = Muted14
-            )
-
-            error?.let {
-                Text(
-                    text = it,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-
+            error?.let { Text(text = it, color = MaterialTheme.colorScheme.error) }
             Button(
                 onClick = {
-                    val parsedMinute = minute.toIntOrNull()
-
-                    val selected = allTypes.firstOrNull {
-                        it.id == typeId
-                    }
-
-                    error = when {
-                        selected == null ->
-                            "Selecciona un tipo de evento."
-
-                        minute.isNotBlank() &&
-                                (
-                                        parsedMinute == null ||
-                                                parsedMinute !in 0..130
-                                        ) ->
-                            "Minuto inválido (0 a 130)."
-
-                        else -> null
-                    }
-
+                    error = MatchEvents.validate(state.typeId, state.minute)
+                    val selected = allTypes.firstOrNull { it.id == state.typeId }
                     if (error == null && selected != null) {
                         try {
-                            val actor = currentActor14()
-                                ?: throw IllegalStateException(
-                                    "Debes iniciar sesión"
-                                )
-
-                            repo.correct(
-                                matchId,
-                                eventId,
-                                original.copy(
-                                    typeId = selected.id,
-                                    typeName = selected.name,
-                                    minute = parsedMinute,
-                                    team = team.ifBlank { null },
-                                    player = player.trim().ifBlank { null },
-                                    notes = notes.trim()
-                                ),
-                                actor
-                            )
-
+                            val actor = currentActor14() ?: throw IllegalStateException("Debes iniciar sesión")
+                            repo.correct(ctx.matchId, eventId, state.toRecord(ctx, selected, actor, original), actor)
                             onSaved()
-
                         } catch (ex: Exception) {
-                            error = ex.message
-                                ?: "No se pudo guardar"
+                            error = "No se pudo guardar la corrección en el celular."
                         }
                     }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Orange14
-                )
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Orange14)
             ) {
-                Text(
-                    text = "GUARDAR CORRECCIÓN",
-                    fontWeight = FontWeight.Bold
-                )
+                Text(text = "GUARDAR CORRECCIÓN", fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -787,22 +595,28 @@ private fun HistorySnapshot14(
                     fontSize = 12.sp
                 )
             } else {
+                val labels = LocalEventLabels.current
                 val names = listOf(
                     "typeName" to "Tipo de evento",
                     "minute" to "Minuto",
                     "team" to "Equipo",
-                    "player" to "Jugador",
+                    "playerId" to "Jugador",
                     "notes" to "Observaciones"
                 )
-
+                // Equipo (OWN/OPPONENT) y jugador (uid) se muestran con su nombre.
+                fun shown(source: JSONObject, key: String): String {
+                    val raw = snapshotField14(source, key)
+                    return when {
+                        raw == "Sin especificar" -> raw
+                        key == "team" -> labels.team(raw)
+                        key == "playerId" -> labels.player(raw)
+                        else -> raw
+                    }
+                }
                 names.forEach { (key, label) ->
-                    val current = snapshotField14(
-                        obj,
-                        key
-                    )
-
+                    val current = shown(obj, key)
                     val old = if (previous != null) {
-                        snapshotField14(previous, key)
+                        shown(previous, key)
                     } else {
                         null
                     }
@@ -854,12 +668,13 @@ private fun HistorySnapshot14(
                         val key = keys.next()
 
                         HistoryField14(
-                            label = key,
+                            label = labels.extraLabel(key),
                             value = extras
                                 .optString(key)
                                 .ifBlank {
                                     "Sin especificar"
                                 }
+                                .let { labels.extraValue(it) }
                         )
                     }
                 }

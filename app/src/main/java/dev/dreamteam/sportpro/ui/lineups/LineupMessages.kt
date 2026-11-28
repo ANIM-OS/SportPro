@@ -61,5 +61,9 @@ internal fun readOnlyInvalid(entries: List<MatchLineupEntry>, roster: List<TeamM
     entries.filter { entry -> roster.none { it.userId == entry.playerId && it.category == category } }
 
 /** Opción A (US-22): el tutor ve a su jugador por nombre y al resto como "Compañero", sin dorsal. */
-internal fun guardianRoster(entries: List<MatchLineupEntry>, playerId: String, playerName: String, category: String): List<TeamMember> =
-    entries.map { TeamMember(it.playerId, if (it.playerId == playerId) playerName else TEAMMATE_LABEL, category) }
+internal fun guardianRoster(entries: List<MatchLineupEntry>, playerId: String, playerName: String, category: String,
+    otherLabel: String = TEAMMATE_LABEL): List<TeamMember> =
+    entries.map { TeamMember(it.playerId, if (it.playerId == playerId) playerName else otherLabel, category) }
+
+/** Admin (solo lectura): no puede leer la plantilla, así que nadie aparece con nombre (US-22). */
+internal const val ANONYMOUS_PLAYER_LABEL = "Jugador"

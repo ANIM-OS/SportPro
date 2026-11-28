@@ -186,6 +186,7 @@ private fun TypeRow(type: EventType, checked: Boolean, switchLabel: String, enab
 }
 
 /** Formulario de tipo: casillas para los datos comunes y "+ Dato adicional". La clave no se muestra. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EventTypeForm(initial: EventType, existingIds: Set<String>, prefix: String, onCancel: () -> Unit, onSave: (EventType) -> Unit) {
     BackHandler(onBack = onCancel)
@@ -215,7 +216,8 @@ private fun EventTypeForm(initial: EventType, existingIds: Set<String>, prefix: 
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedTextField(draft.label, { v -> extras = extras.toMutableList().also { it[index] = draft.copy(label = v.take(EventCatalogRules.MAX_LABEL)) } },
                         label = { Text("Etiqueta (ej. Color)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // 4 clases (Texto, Número, Opciones, Jugador convocado): FlowRow para pantallas estrechas.
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         ExtraKinds.ALL.forEach { kind ->
                             FilterChip(selected = draft.kind == kind, onClick = { extras = extras.toMutableList().also { it[index] = draft.copy(kind = kind) } },
                                 label = { Text(ExtraKinds.label(kind)) })

@@ -60,6 +60,18 @@ class CallupRepository {
                 if (failure != null) error("No se pudo cargar la convocatoria")
                 else change(snapshot?.documents.orEmpty().mapNotNull(::selection))
             }
+    /** Admin (solo lectura, las reglas lo exigen con isAdmin()): todos los partidos. */
+    fun allMatches(change: (List<CallupMatch>) -> Unit, error: (String) -> Unit) =
+        fixtures.addSnapshotListener { snapshot, failure ->
+            if (failure != null) error("No se pudieron cargar los partidos")
+            else change(snapshot?.documents.orEmpty().mapNotNull(::match).sortedByDescending { it.kickoff })
+        }
+    /** Admin (solo lectura): convocatorias de un partido, sin filtrar por entrenadora. */
+    fun matchSelections(matchId: String, change: (List<PlayerCallup>) -> Unit, error: (String) -> Unit) =
+        selections.whereEqualTo("matchId", matchId).addSnapshotListener { snapshot, failure ->
+            if (failure != null) error("No se pudo cargar la convocatoria")
+            else change(snapshot?.documents.orEmpty().mapNotNull(::selection))
+        }
     fun mySelections(change: (List<PlayerCallup>) -> Unit, error: (String) -> Unit) =
         selections.whereEqualTo("playerId", uid).addSnapshotListener { snapshot, failure ->
             if (failure != null) error("No se pudieron cargar tus convocatorias")

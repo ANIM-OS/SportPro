@@ -82,7 +82,7 @@ const BASE = [
   ['penal', 'Penal', 30, [{ key: 'resultado', label: 'Resultado', kind: 'choice', options: ['Gol', 'Fallado', 'Atajado'], required: false }]],
   ['tarjeta', 'Tarjeta', 40, [{ key: 'color', label: 'Color', kind: 'choice', options: ['Amarilla', 'Roja'], required: true }]],
   ['fuera_de_juego', 'Fuera de juego', 50, []],
-  ['cambio', 'Cambio', 60, [{ key: 'sale', label: 'Sale', kind: 'text', options: [], required: false }, { key: 'entra', label: 'Entra', kind: 'text', options: [], required: false }]],
+  ['cambio', 'Cambio', 60, [{ key: 'sale', label: 'Sale', kind: 'player', options: [], required: false }, { key: 'entra', label: 'Entra', kind: 'player', options: [], required: false }]],
   ['saque_lateral', 'Saque lateral', 70, []], ['saque_de_meta', 'Saque de meta', 80, []], ['tiro_de_esquina', 'Tiro de esquina', 90, []],
 ].map(([id, name, order, extraFields]) => ({ id, name, order, extraFields, requiredCore: [], active: true, base: true }));
 const BASE_IDS = BASE.map((t) => t.id);

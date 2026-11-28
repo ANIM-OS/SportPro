@@ -35,8 +35,10 @@ object ExtraKinds {
     const val TEXT = "text"
     const val NUMBER = "number"
     const val CHOICE = "choice"
-    val ALL = listOf(TEXT, NUMBER, CHOICE)
-    fun label(kind: String) = when (kind) { NUMBER -> "Número"; CHOICE -> "Opciones"; else -> "Texto" }
+    /** Uno de los convocados del partido (se guarda su uid). */
+    const val PLAYER = "player"
+    val ALL = listOf(TEXT, NUMBER, CHOICE, PLAYER)
+    fun label(kind: String) = when (kind) { NUMBER -> "Número"; CHOICE -> "Opciones"; PLAYER -> "Jugador convocado"; else -> "Texto" }
 }
 
 /** Lista cerrada de datos comunes que un tipo puede marcar como obligatorios. */
@@ -70,7 +72,7 @@ object EventCatalogRules {
             ExtraField("color", "Color", ExtraKinds.CHOICE, listOf("Amarilla", "Roja"), required = true))),
         EventType("fuera_de_juego", "Fuera de juego", base = true, order = 50),
         EventType("cambio", "Cambio", base = true, order = 60, extraFields = listOf(
-            ExtraField("sale", "Sale"), ExtraField("entra", "Entra"))),
+            ExtraField("sale", "Sale", ExtraKinds.PLAYER), ExtraField("entra", "Entra", ExtraKinds.PLAYER))),
         EventType("saque_lateral", "Saque lateral", base = true, order = 70),
         EventType("saque_de_meta", "Saque de meta", base = true, order = 80),
         EventType("tiro_de_esquina", "Tiro de esquina", base = true, order = 90)
