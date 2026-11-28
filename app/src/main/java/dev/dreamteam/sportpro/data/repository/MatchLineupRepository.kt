@@ -1,9 +1,13 @@
 package dev.dreamteam.sportpro.data.repository
 
 import com.google.android.gms.tasks.Task
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.*
 import dev.dreamteam.sportpro.data.model.MatchLineupEntry
 import dev.dreamteam.sportpro.ui.callups.CallupMatch
+import dev.dreamteam.sportpro.ui.lineups.LINEUP_FORMATION_CHANGED
+import dev.dreamteam.sportpro.ui.lineups.LINEUP_NOT_CALLED
+import dev.dreamteam.sportpro.ui.lineups.LINEUP_SLOT_TAKEN
 
 
 /** US-11. One lineup per encounter; one player document and exclusive starter-slot documents. */
@@ -30,14 +34,14 @@ class MatchLineupRepository {
         return db.runTransaction { tx ->
             val ref = lineup(match.id)
             val parent = tx.get(ref)
-            check(!parent.exists() || parent.getString("formation") == formation) { "La formación cambió. Revisa la cancha antes de guardar." }
+            check(!parent.exists() || parent.getString("formation") == formation) { LINEUP_FORMATION_CHANGED }
             val playerRef = ref.collection("players").document(playerId)
             val previous = tx.get(playerRef)
             val target = if (kind == "STARTER") ref.collection("slots").document(position) else null
             val targetDoc = target?.let { tx.get(it) }
-            check(targetDoc == null || !targetDoc.exists() || targetDoc.getString("playerId") == playerId) { "Esta posición ya está ocupada. Retira o mueve primero al titular." }
+            check(targetDoc == null || !targetDoc.exists() || targetDoc.getString("playerId") == playerId) { LINEUP_SLOT_TAKEN }
             val callup = tx.get(db.collection("matchCallupPlayers").document("${match.id}_$playerId"))
-            check(callup.getBoolean("selected") == true) { "El jugador ya no está convocado" }
+            check(callup.getBoolean("selected") == true) { LINEUP_NOT_CALLED }
             if (!parent.exists()) tx.set(ref, mapOf("teamId" to match.teamId, "formation" to formation, "updatedAt" to FieldValue.serverTimestamp()))
             val oldPosition = previous.getString("position")
             if (previous.getString("kind") == "STARTER" && (kind != "STARTER" || oldPosition != position)) {
@@ -48,10 +52,21 @@ class MatchLineupRepository {
             null
         }
     }
+    /**
+     * Acceso de lectura del tutor: las reglas no pueden saber de qué jugador es tutor en una lectura de
+     * lista, así que se guarda guardians/{uid} con ese jugador antes de abrir la alineación.
+     */
+    fun openAsGuardian(matchId: String, playerId: String): Task<Void> {
+        val uid = requireNotNull(FirebaseAuth.getInstance().currentUser?.uid)
+        return lineup(matchId).collection("guardians").document(uid)
+            .set(mapOf("playerId" to playerId, "updatedAt" to FieldValue.serverTimestamp()))
+    }
     fun remove(matchId: String, playerId: String): Task<Void> {
         return db.runTransaction { tx ->
             val ref = lineup(matchId).collection("players").document(playerId)
             val old = tx.get(ref)
+            // Ya retirado (otro dispositivo o doble toque): la lista ya está al día, no hay nada que borrar.
+            if (!old.exists()) return@runTransaction null
             if (old.getString("kind") == "STARTER") tx.delete(lineup(matchId).collection("slots").document(requireNotNull(old.getString("position"))))
             tx.delete(ref)
             null

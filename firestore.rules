@@ -118,6 +118,20 @@ service cloud.firestore {
       return request.auth != null && (ownsCallupTeam(fixture.teamId)
         || callupMember(fixture.teamId, request.auth.uid, fixture.category));
     }
+    // Tutor: las lecturas de lista (players/, slots/) no llevan el ID de su jugador, así que el tutor
+    // crea antes guardians/{su uid} con ese playerId. En cada lectura se vuelve a comprobar el vínculo
+    // y que la convocatoria siga vigente: si se retira o se revoca, el acceso se corta solo.
+    function lineupGuardian(matchId) {
+      let access = get(/databases/$(database)/documents/matchLineups/$(matchId)/guardians/$(request.auth.uid)).data;
+      return availabilityGuardian(access.playerId)
+        && get(/databases/$(database)/documents/matchCallupPlayers/$(matchId + '_' + access.playerId)).data.selected == true;
+    }
+    // Lectura de la alineación: dueña o miembro de la categoría, admin (solo lectura) o tutor con acceso.
+    // Peor caso (tutor): partido, equipo, membresía, admins, acceso, vínculo, users y convocatoria = 8 de 10.
+    function canViewMatchLineup(matchId) {
+      return request.auth != null
+        && (canReadMatchLineup(matchId) || isAdmin() || lineupGuardian(matchId));
+    }
     function canWriteMatchLineup(matchId) {
       let fixture = lineupFixture(matchId);
       return request.auth != null && callupOwnsTeam(fixture.teamId) && request.time < fixture.kickoff;
@@ -126,7 +140,7 @@ service cloud.firestore {
       return position in ['P0','P1','P2','P3','P4','P5','P6','P7','P8','P9','P10'];
     }
     match /matchLineups/{matchId} {
-      allow read: if canReadMatchLineup(matchId);
+      allow read: if canViewMatchLineup(matchId);
       allow create, update: if canWriteMatchLineup(matchId)
         && request.resource.data.keys().hasAll(['teamId','formation','updatedAt'])
         && request.resource.data.keys().hasOnly(['teamId','formation','updatedAt'])
@@ -138,7 +152,7 @@ service cloud.firestore {
         || ownsCallupTeam(resource.data.teamId)
         || ownsCallupTeam(lineupFixture(matchId).teamId));
       match /players/{playerId} {
-        allow read: if canReadMatchLineup(matchId);
+        allow read: if canViewMatchLineup(matchId);
         function validAssignment() {
           let d = request.resource.data;
           let fixture = lineupFixture(matchId);
@@ -165,7 +179,7 @@ service cloud.firestore {
           || !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/slots/$(resource.data.position)));
       }
       match /slots/{position} {
-        allow read: if canReadMatchLineup(matchId);
+        allow read: if canViewMatchLineup(matchId);
         function validSlot() {
           let d = request.resource.data;
           let assignment = getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(d.playerId)).data;
@@ -186,6 +200,24 @@ service cloud.firestore {
           !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId))
           || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.kind != 'STARTER'
           || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.position != position);
+      }
+      // Acceso del tutor (ver lineupGuardian). Solo lo escribe el propio tutor verificado de un jugador
+      // convocado en este partido; la entrenadora lo lista y lo borra al cancelar o eliminar el equipo.
+      match /guardians/{guardianId} {
+        allow read: if request.auth != null && (request.auth.uid == guardianId
+          || lineupFixture(matchId).ownerId == request.auth.uid
+          || ownsCallupTeam(lineupFixture(matchId).teamId));
+        allow create, update: if request.auth != null && request.auth.uid == guardianId
+          && request.resource.data.keys().hasAll(['playerId', 'updatedAt'])
+          && request.resource.data.keys().hasOnly(['playerId', 'updatedAt'])
+          && request.resource.data.playerId is string
+          && request.resource.data.updatedAt == request.time
+          && exists(/databases/$(database)/documents/matchFixtures/$(matchId))
+          && availabilityGuardian(request.resource.data.playerId)
+          && get(/databases/$(database)/documents/matchCallupPlayers/$(matchId + '_' + request.resource.data.playerId)).data.selected == true;
+        allow delete: if request.auth != null && (request.auth.uid == guardianId
+          || lineupFixture(matchId).ownerId == request.auth.uid
+          || ownsCallupTeam(lineupFixture(matchId).teamId));
       }
     }
 

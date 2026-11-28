@@ -29,8 +29,13 @@ internal fun formationSlots(formation: String): List<Triple<Float, Float, String
     }
 }
 
+/**
+ * [alert]: jugadores marcados con "⚠" (US-11: respondieron No disponible); texto, no solo color.
+ * [shortName]: nombre corto en la casilla (US-11: el tutor ve "Compañero" en lugar de otros menores).
+ */
 @Composable
-internal fun LineupPitch(formation: String, positions: Map<String, String>, members: List<TeamMember>, owner: Boolean, onSlot: (Int) -> Unit) {
+internal fun LineupPitch(formation: String, positions: Map<String, String>, members: List<TeamMember>, owner: Boolean,
+    alert: (String) -> Boolean = { false }, shortName: (TeamMember) -> String = { it.playerName.take(8) }, onSlot: (Int) -> Unit) {
     BoxWithConstraints(Modifier.fillMaxWidth().height(450.dp).background(Color(0xFF174735), RoundedCornerShape(16.dp))
         .border(BorderStroke(2.dp, Color(0xFF679983)), RoundedCornerShape(16.dp))) {
         Canvas(Modifier.fillMaxSize().padding(14.dp)) {
@@ -46,8 +51,12 @@ internal fun LineupPitch(formation: String, positions: Map<String, String>, memb
                 modifier = Modifier.offset(x = maxWidth * x - 30.dp, y = maxHeight * y - 30.dp).size(60.dp),
                 shape = CircleShape, color = Color(0xFF10362B), border = BorderStroke(2.dp, Color.White.copy(alpha = .75f))) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Text(member?.jerseyNumber?.let { "#$it" } ?: if (owner) "+" else "·", color = Color.White, fontWeight = FontWeight.Bold)
-                    Text(member?.playerName?.take(8) ?: role, color = Color.White, fontSize = 9.sp, maxLines = 1)
+                    val warned = member != null && alert(member.userId)
+                    val top = if (warned) listOfNotNull("⚠", member?.jerseyNumber?.let { "#$it" }).joinToString(" ")
+                        else member?.jerseyNumber?.let { "#$it" } ?: if (owner) "+" else "·"
+                    Text(top, color = if (warned) Color(0xFFFFD54F) else Color.White, fontWeight = FontWeight.Bold)
+                    Text(member?.let(shortName) ?: role, color = Color.White, fontSize = 9.sp, maxLines = 1)
+                    if (warned) Text("No disp.", color = Color(0xFFFFD54F), fontSize = 8.sp, maxLines = 1)
                 }
             }
         }
