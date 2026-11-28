@@ -60,7 +60,11 @@ service cloud.firestore {
     }
     match /matchCallupPlayers/{selectionId} {
       allow read: if request.auth != null && (
-        resource.data.playerId == request.auth.uid || resource.data.ownerId == request.auth.uid
+        // La transacción de "Guardar convocatoria" lee la convocatoria antes de crearla:
+        // solo la dueña del partido ({matchId} = parte antes de '_') puede ver que aún no existe.
+        (resource == null
+          && get(/databases/$(database)/documents/matchFixtures/$(selectionId.split('_')[0])).data.ownerId == request.auth.uid)
+        || resource.data.playerId == request.auth.uid || resource.data.ownerId == request.auth.uid
         || availabilityGuardian(resource.data.playerId)
         || isAdmin()
       );

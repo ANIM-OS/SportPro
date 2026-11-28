@@ -14,6 +14,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.google.firebase.firestore.FirebaseFirestoreException
 import dev.dreamteam.sportpro.data.model.Team
 import dev.dreamteam.sportpro.data.model.TeamMember
 import dev.dreamteam.sportpro.data.repository.TeamDirectoryRepository
@@ -21,6 +22,17 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
+
+/**
+ * La transacción lee la membresía de cada alta y el equipo: si el jugador salió del equipo
+ * o el equipo se borró mientras la pantalla estaba abierta, las reglas niegan esa lectura.
+ */
+internal fun saveCallupErrorMessage(failure: Exception): String {
+    val denied = generateSequence<Throwable>(failure) { it.cause }.take(5)
+        .any { (it as? FirebaseFirestoreException)?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED }
+    return if (denied) "No se guardó la convocatoria: puede que un jugador ya no pertenezca al equipo o que el equipo ya no exista. Revisa la plantilla y vuelve a intentarlo."
+    else "No se guardó la convocatoria. No se aplicó ningún cambio: ${failure.localizedMessage}"
+}
 
 internal fun dateLabel(millis: Long) = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, Locale.forLanguageTag("es-PE")).format(Date(millis))
 
@@ -192,7 +204,7 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
                         busy = true; error = null; message = null
                         repository.saveSelections(match, selected, records)
                             .addOnSuccessListener { dirty = false; message = null }
-                            .addOnFailureListener { error = "No se guardó la convocatoria. No se aplicó ningún cambio: ${it.localizedMessage}" }
+                            .addOnFailureListener { error = saveCallupErrorMessage(it) }
                             .addOnCompleteListener { busy = false }
                     }) { Text(if (busy) "Guardando…" else "Guardar convocatoria") }
                 if (dirty) TextButton(enabled = !busy, onClick = {
