@@ -83,6 +83,8 @@ Las variables de entorno y credenciales privadas deberán mantenerse fuera del c
 
 **Publicaciones (US-18).** Criterios en [`docs/criterios-us18.md`](docs/criterios-us18.md). Jugador y Entrenador aprobado publican hasta 1000 caracteres con visibilidad Todos, Equipo o Academia; el Padre/Tutor solo lee. Las reglas comprueban que Todos no lleve equipo y que Equipo/Academia apunte a un `teams` del mismo tipo del que el autor es dueño o miembro. La Academia también la ven los jugadores y entrenadores de los equipos vinculados (`academyId`), tras guardar `academyAccess/{academyId}_{uid}`, y el tutor lee las de Equipo del equipo de su jugador vinculado con el acceso de US-17 (`announcementGuardians`). El autor aparece con el nombre de su perfil o "Usuario SportPro", nunca con el correo, y su rol legible. Las publicaciones ocultadas solo las ven su autor ("Ocultada por moderación"), los moderadores y el admin, igual que sus comentarios. Sin conexión se publica igual y aparece "Pendiente de sincronizar". Nadie edita ni borra publicaciones.
 
+**Comentarios y reacciones (US-19).** Criterios en [`docs/criterios-us19.md`](docs/criterios-us19.md). Comentan (hasta 300 caracteres), dan "Me gusta" y reportan el Jugador y el Entrenador aprobado, solo en publicaciones activas y visibles para ellos; el Padre/Tutor y la entrenadora sin aprobar ven "Solo lectura". El autor del comentario aparece con el nombre de su perfil o "Usuario SportPro" (las reglas lo comprueban). Hay un solo "Me gusta" por persona (documento `likes/{uid}`) y se puede quitar. Al reportar se elige el motivo; no se pueden reportar los comentarios propios. Los comentarios ocultados por moderación solo los ven su autor ("Ocultado por moderación"), los moderadores y el admin. Sin conexión no se bloquea y se ve "Pendiente de sincronizar".
+
 Para habilitar la moderación de comunidad, un administrador del proyecto debe crear en Firestore el documento `moderators/{uid}` para la cuenta designada. La aplicación solo permite a esa cuenta ocultar publicaciones; los usuarios no pueden crear documentos de moderadores mediante las reglas de Firestore. Tras asignar el permiso, el moderador debe volver a abrir la pantalla de Comunidad.
 
 Para designar un administrador, crea en Firestore el documento `admins/{uid}` desde la consola de Firebase. Un administrador puede ocultar publicaciones igual que un moderador; no se guarda en `roles` porque cada usuario puede editar ese campo, y no lo convierte en entrenador aprobado.
@@ -278,7 +280,8 @@ la pestaña Partidos), `client-match-events-check.mjs` (eventos e historial, US-
 `client-status-stats-check.mjs` (finalizar partido, "Cuenta como gol" y lecturas de
 Estadísticas, US-15/16). Los anuncios (US-17) se prueban con
 `tests/announcements/client-announcements-check.mjs` y las publicaciones de la comunidad
-(US-18) con `tests/community/client-community-check.mjs`.
+(US-18) con `tests/community/client-community-check.mjs`; los comentarios y reacciones (US-19)
+con `tests/community/client-comments-check.mjs`.
 Solo utiliza `demo-sportpro` en localhost; sus cuentas y datos ficticios no funcionan
 en SportPro ni se migran al Firebase compartido. La interfaz de los datos de prueba
 está en http://127.0.0.1:4000/firestore. No ejecutar `firebase deploy` para estas pruebas.

@@ -507,13 +507,25 @@ service cloud.firestore {
         );
       }
 
-      match /comments/{commentId} {
-        // Las consultas deben filtrar moderated == false.
-        allow get: if canReadPostContent()
-          && (resource.data.moderated == false || canModerateCommunity());
-        allow list: if canReadPostContent() && resource.data.moderated == false;
+      // US-19: comentar, reaccionar y reportar = mismo criterio que publicar (US-18): rol JUGADOR o
+      // ENTRENADOR aprobado. El tutor (y la entrenadora sin aprobar) solo leen, también en posts TODOS.
+      function canEngageCommunity() {
+        return request.auth != null
+          && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['JUGADOR'])
+            || isApprovedCoach());
+      }
 
-        allow create: if canInteractWithPost()
+      match /comments/{commentId} {
+        // Las consultas deben filtrar moderated == false, o authorId == uid para ver los propios ocultos.
+        // US-19: el autor lee su comentario oculto ("Ocultado por moderación"); los demás no.
+        allow get: if canReadPostContent()
+          && (resource.data.moderated == false || resource.data.authorId == request.auth.uid || canModerateCommunity());
+        allow list: if canReadPostContent()
+          && (resource.data.moderated == false || resource.data.authorId == request.auth.uid);
+
+        // Peor caso (ACADEMIA): post, teams (academia), academyAccess, teams (equipo), membresía, users
+        // y coachApprovals = 7 documentos (límite 10).
+        allow create: if canInteractWithPost() && canEngageCommunity()
           && request.resource.data.keys().hasAll([
             'authorId', 'authorName', 'text', 'createdAt', 'moderated'
           ])
@@ -521,9 +533,8 @@ service cloud.firestore {
             'authorId', 'authorName', 'text', 'createdAt', 'moderated'
           ])
           && request.resource.data.authorId == request.auth.uid
-          && request.resource.data.authorName is string
-          && request.resource.data.authorName.size() > 0
-          && request.resource.data.authorName.size() <= 150
+          // US-19: nombre del perfil (o "Usuario SportPro"), nunca el correo ni otro nombre.
+          && request.resource.data.authorName == profileDisplayName()
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
           && request.resource.data.text.size() <= 300
@@ -539,7 +550,8 @@ service cloud.firestore {
         match /reports/{reporterId} {
           // Los reportes NO se muestran públicamente.
           allow read: if canModerateCommunity();
-          allow create: if canInteractWithPost()
+          // Peor caso: los 7 de comentar + el comentario = 8 documentos.
+          allow create: if canInteractWithPost() && canEngageCommunity()
             && reporterId == request.auth.uid
             && exists(/databases/$(database)/documents/communityPosts/$(postId)/comments/$(commentId))
             && get(/databases/$(database)/documents/communityPosts/$(postId)/comments/$(commentId)).data.moderated == false
@@ -557,7 +569,7 @@ service cloud.firestore {
 
       match /likes/{userId} {
         allow read: if canReadPostContent();
-        allow create: if canInteractWithPost()
+        allow create: if canInteractWithPost() && canEngageCommunity()
           && userId == request.auth.uid
           && request.resource.data.keys().hasAll(['userId', 'createdAt'])
           && request.resource.data.keys().hasOnly(['userId', 'createdAt'])

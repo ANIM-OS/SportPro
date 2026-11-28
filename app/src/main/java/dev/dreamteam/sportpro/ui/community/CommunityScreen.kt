@@ -325,7 +325,7 @@ private fun CommunityLikesCount(postId: String) {
     var error by remember(postId) { mutableStateOf(false) }
     DisposableEffect(postId) {
         val listener = repo.observeLikes(postId,
-            onUpdate = { total, _ -> count = total; error = false },
+            onUpdate = { total, _, _ -> count = total; error = false },
             onError = { error = true })
         onDispose { listener.remove() }
     }

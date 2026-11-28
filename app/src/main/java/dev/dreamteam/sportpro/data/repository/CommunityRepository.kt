@@ -276,97 +276,115 @@ class CommunityRepository {
             .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo ocultar la publicación") }
     }
 
-    /** US-19: comentarios por publicación. Las reglas de Firestore deben validar visibilidad. */
+    /** US-19: comentario de una publicación. */
     data class PostComment(
         val id: String,
         val authorId: String,
         val authorName: String,
         val text: String,
         val createdAt: Timestamp?,
-        val moderated: Boolean = false
+        val moderated: Boolean = false,
+        /** Escrito en este celular y aún no confirmado por el servidor. */
+        val pending: Boolean = false
     )
 
-    fun observeComments(postId: String, onUpdate: (List<PostComment>) -> Unit,
-                        onError: (String) -> Unit): ListenerRegistration =
-        firestore.collection("communityPosts").document(postId).collection("comments")
-            .whereEqualTo("moderated", false)
-            .addSnapshotListener { snap, error ->
-                if (error != null) {
-                    onError(error.localizedMessage ?: "No se pudieron cargar los comentarios")
-                } else {
-                    onUpdate(snap?.documents.orEmpty().map { doc ->
-                        PostComment(
-                            id = doc.id,
-                            authorId = doc.getString("authorId").orEmpty(),
-                            authorName = doc.getString("authorName").orEmpty(),
-                            text = doc.getString("text").orEmpty(),
-                            createdAt = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
-                            moderated = doc.getBoolean("moderated") == true
-                        )
-                    }.sortedBy { it.createdAt?.toDate()?.time ?: Long.MAX_VALUE })
-                }
-            }
+    private fun toComment(doc: DocumentSnapshot) = PostComment(
+        id = doc.id,
+        authorId = doc.getString("authorId").orEmpty(),
+        authorName = doc.getString("authorName").orEmpty(),
+        text = doc.getString("text").orEmpty(),
+        createdAt = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
+        moderated = doc.getBoolean("moderated") == true,
+        pending = doc.metadata.hasPendingWrites()
+    )
 
-    /** Un documento por UID asegura como máximo un 'Me gusta' por usuario. */
-    fun observeLikes(postId: String, onUpdate: (Int, Boolean) -> Unit,
+    /**
+     * Comentarios visibles (moderated == false) más los propios (authorId == uid), que incluyen los
+     * ocultados por moderación: el autor los ve con "Ocultado por moderación". Ambas consultas coinciden
+     * con las reglas. Con MetadataChanges.INCLUDE se ve "Pendiente de sincronizar".
+     */
+    fun observeComments(postId: String, onUpdate: (List<PostComment>) -> Unit,
+                        onError: (String) -> Unit): ListenerRegistration {
+        val comments = firestore.collection("communityPosts").document(postId).collection("comments")
+        val uid = auth.currentUser?.uid
+        val byQuery = mutableMapOf<String, List<PostComment>>()
+        fun emit() = onUpdate(CommunityRules.mergeComments(byQuery.values.flatten()))
+        val visible = comments.whereEqualTo("moderated", false)
+            .addSnapshotListener(MetadataChanges.INCLUDE) { snap, error ->
+                if (error != null) onError("No se pudieron cargar los comentarios")
+                else { byQuery["visible"] = snap?.documents.orEmpty().map(::toComment); emit() }
+            }
+        val own = uid?.let {
+            comments.whereEqualTo("authorId", it).addSnapshotListener(MetadataChanges.INCLUDE) { snap, error ->
+                if (error == null) { byQuery["own"] = snap?.documents.orEmpty().map(::toComment); emit() }
+            }
+        }
+        return ListenerRegistration { visible.remove(); own?.remove() }
+    }
+
+    /**
+     * Un documento por UID asegura como máximo un "Me gusta" por usuario. [onUpdate]: total, si el propio
+     * existe y si está pendiente de sincronizar.
+     */
+    fun observeLikes(postId: String, onUpdate: (Int, Boolean, Boolean) -> Unit,
                      onError: (String) -> Unit): ListenerRegistration {
         val uid = auth.currentUser?.uid
         return firestore.collection("communityPosts").document(postId).collection("likes")
-            .addSnapshotListener { snap, error ->
-                if (error != null) onError(error.localizedMessage ?: "No se pudieron cargar los Me gusta")
-                else onUpdate(snap?.size() ?: 0, uid != null && snap?.documents.orEmpty().any { it.id == uid })
+            .addSnapshotListener(MetadataChanges.INCLUDE) { snap, error ->
+                if (error != null) onError("No se pudieron cargar los Me gusta")
+                else {
+                    val mine = snap?.documents.orEmpty().firstOrNull { it.id == uid }
+                    onUpdate(snap?.size() ?: 0, mine != null, snap?.metadata?.hasPendingWrites() == true)
+                }
             }
     }
 
-    /** El usuario debe estar autenticado y la publicación visible para él (reforzar con reglas). */
+    /**
+     * Comenta sin bloquear sin conexión: nombre del perfil (caché si no hay red) o "Usuario SportPro",
+     * nunca displayName ni correo. [onSuccess] se llama al guardar en el celular; si el servidor lo
+     * rechaza después, [onError].
+     */
     fun addComment(postId: String, text: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         val user = auth.currentUser ?: run { onError("Inicia sesión para comentar"); return }
-        val clean = text.trim()
-        if (clean.isEmpty() || clean.length > 300) {
-            onError("Escribe entre 1 y 300 caracteres"); return
-        }
+        CommunityRules.validateComment(text)?.let { onError(it); return }
         firestore.collection("users").document(user.uid).get()
             .addOnSuccessListener { profile ->
-                val first = profile.getString("firstName").orEmpty().trim()
-                val last = profile.getString("lastName").orEmpty().trim()
-                val name = "$first $last".trim().ifBlank {
-                    user.displayName?.takeIf { it.isNotBlank() }
-                        ?: user.email?.substringBefore('@') ?: "Usuario SportPro"
-                }
                 val data = mapOf(
                     "authorId" to user.uid,
-                    "authorName" to name,
-                    "text" to clean,
+                    "authorName" to CommunityRules.authorName(profile.getString("firstName"), profile.getString("lastName")),
+                    "text" to text.trim(),
                     "createdAt" to FieldValue.serverTimestamp(),
                     "moderated" to false
                 )
                 firestore.collection("communityPosts").document(postId).collection("comments").add(data)
-                    .addOnSuccessListener { onSuccess() }
-                    .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo comentar") }
+                    .addOnFailureListener { onError("No se pudo comentar: no tienes permiso o la publicación ya no está disponible.") }
+                onSuccess()
             }
-            .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo consultar el perfil") }
+            .addOnFailureListener { onError("Conéctate una vez para cargar tu perfil y poder comentar.") }
     }
 
+    /** Dar o quitar el "Me gusta" propio; se aplica al instante (también sin conexión). */
     fun setLiked(postId: String, liked: Boolean, onSuccess: () -> Unit, onError: (String) -> Unit) {
         val user = auth.currentUser ?: run { onError("Inicia sesión para reaccionar"); return }
         val doc = firestore.collection("communityPosts").document(postId)
             .collection("likes").document(user.uid)
         val task = if (liked) doc.set(mapOf("userId" to user.uid,
             "createdAt" to FieldValue.serverTimestamp())) else doc.delete()
-        task.addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo guardar el Me gusta") }
+        task.addOnFailureListener { onError("No se pudo guardar el Me gusta.") }
+        onSuccess()
     }
 
+    /** Reporte con motivo; ID = uid, así un usuario reporta cada comentario una sola vez. */
     fun reportComment(postId: String, commentId: String, reason: String,
                       onSuccess: () -> Unit, onError: (String) -> Unit) {
         val uid = auth.currentUser?.uid ?: run { onError("Inicia sesión para reportar"); return }
-        // Identidad determinista: el mismo usuario no genera múltiples reportes del mismo comentario.
+        CommunityRules.validateReason(reason)?.let { onError(it); return }
         firestore.collection("communityPosts").document(postId).collection("comments")
             .document(commentId).collection("reports").document(uid)
-            .set(mapOf("reporterId" to uid, "reason" to reason,
+            .set(mapOf("reporterId" to uid, "reason" to reason.trim(),
                 "createdAt" to FieldValue.serverTimestamp()))
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo enviar el reporte") }
+            .addOnFailureListener { onError("No se pudo enviar el reporte (puede que ya lo hayas reportado).") }
+        onSuccess()
     }
 
     fun moderateComment(postId: String, commentId: String,
