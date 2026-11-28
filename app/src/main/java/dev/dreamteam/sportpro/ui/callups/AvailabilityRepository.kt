@@ -44,6 +44,12 @@ class AvailabilityRepository {
             else change(snapshot?.documents.orEmpty().map(::parse))
         }
     }
+    /** Admin (solo lectura, isAdmin() en las reglas): respuestas de un partido sin filtrar por entrenadora. */
+    fun matchResponses(matchId: String, change: (List<AvailabilityResponse>) -> Unit, error: (String) -> Unit): ListenerRegistration =
+        responses.whereEqualTo("matchId", matchId).addSnapshotListener { snapshot, failure ->
+            if (failure != null) error("No se pudieron cargar las respuestas")
+            else change(snapshot?.documents.orEmpty().map(::parse))
+        }
     fun respond(row: PlayerCallup, available: Boolean): Task<Void> {
         val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return Tasks.forException(IllegalStateException("Inicia sesión"))
         // Server rules re-read the active selection, current membership and authoritative deadline.

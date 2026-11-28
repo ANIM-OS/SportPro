@@ -189,8 +189,9 @@ private fun GuardianPlayerCallups(link: GuardianLink, repository: CallupReposito
     rows.forEach { row -> key(row.id) { GuardianCallupCard(row, link.playerName, repository, onOpenLineup) } }
 }
 
+/** US-10: tarjeta del tutor. [onOpenLineup] null oculta el botón (en el detalle la alineación es otra pestaña). */
 @Composable
-private fun GuardianCallupCard(row: PlayerCallup, playerName: String, repository: CallupRepository, onOpenLineup: (CallupMatch, GuardianLineupView) -> Unit) {
+internal fun GuardianCallupCard(row: PlayerCallup, playerName: String, repository: CallupRepository, onOpenLineup: ((CallupMatch, GuardianLineupView) -> Unit)?) {
     val lineups = remember { MatchLineupRepository() }
     var opening by remember(row.id) { mutableStateOf(false) }
     var openError by remember(row.id) { mutableStateOf<String?>(null) }
@@ -215,7 +216,7 @@ private fun GuardianCallupCard(row: PlayerCallup, playerName: String, repository
                 // US-11 (P4b): solo con convocatoria vigente y partido no cancelado. Primero se guarda el
                 // acceso del tutor (guardians/{uid}); sin él las reglas no saben de qué jugador es tutor.
                 val encounter = row.encounter
-                if (encounter != null && showLineupButton(state)) {
+                if (onOpenLineup != null && encounter != null && showLineupButton(state)) {
                     OutlinedButton(enabled = !opening, onClick = {
                         opening = true; openError = null
                         lineups.openAsGuardian(row.matchId, row.playerId)

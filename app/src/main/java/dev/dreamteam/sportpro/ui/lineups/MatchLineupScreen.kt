@@ -33,8 +33,11 @@ data class GuardianLineupView(val playerId: String, val playerName: String)
  * ni la plantilla, así que usa la copia del encuentro de la convocatoria y no muestra otros nombres.
  */
 @Composable
-fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, guardian: GuardianLineupView? = null, onBack: () -> Unit) {
-    val manage = canManage && guardian == null
+fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, guardian: GuardianLineupView? = null,
+    showHeader: Boolean = true, anonymous: Boolean = false, onBack: () -> Unit) {
+    val manage = canManage && guardian == null && !anonymous
+    // Sin plantilla: tutor (solo su jugador por nombre) y admin anónimo (nadie por nombre).
+    val readsRoster = guardian == null && !anonymous
     val repository = remember { MatchLineupRepository() }
     val callups = remember { CallupRepository() }
     val directory = remember { TeamDirectoryRepository() }
@@ -46,7 +49,7 @@ fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, guardian: Guar
     var selected by remember(encounter.id) { mutableStateOf<Set<String>>(emptySet()) }
     var responses by remember(encounter.id) { mutableStateOf<List<AvailabilityResponse>>(emptyList()) }
     var pending by remember(encounter.id, manage, guardian) {
-        mutableStateOf(setOf("match", "formation", "players") + (if (guardian == null) setOf("roster") else emptySet()) +
+        mutableStateOf(setOf("match", "formation", "players") + (if (readsRoster) setOf("roster") else emptySet()) +
             if (manage) setOf("callups", "responses") else emptySet())
     }
     var failures by remember(encounter.id) { mutableStateOf<Map<String, String>>(emptyMap()) }
@@ -64,7 +67,7 @@ fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, guardian: Guar
             .addOnFailureListener { message = lineupErrorMessage(it) }
             .addOnCompleteListener { busy = false }
     }
-    DisposableEffect(encounter.id, manage, guardian) {
+    DisposableEffect(encounter.id, manage, guardian, anonymous) {
         val listeners = mutableListOf(
             if (guardian == null) callups.match(encounter.id, { match = it; loaded("match") }, { match = null; failed("match", it) },
                 { match = null; failed("match", "El partido fue cancelado") })
@@ -74,7 +77,7 @@ fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, guardian: Guar
             repository.observeFormation(encounter.id, { formation = it; loaded("formation") }, { failed("formation", it) }),
             repository.observePlayers(encounter.id, { entries = it; loaded("players") }, { entries = emptyList(); failed("players", it) })
         )
-        if (guardian == null) listeners += directory.listenRoster(encounter.teamId, { roster = it; loaded("roster") }, { roster = emptyList(); failed("roster", it) })
+        if (readsRoster) listeners += directory.listenRoster(encounter.teamId, { roster = it; loaded("roster") }, { roster = emptyList(); failed("roster", it) })
         if (manage) {
             listeners += callups.coachSelections(encounter.id, { selected = it.filter { row -> row.selected }.map { row -> row.playerId }.toSet(); loaded("callups") }, { selected = emptySet(); failed("callups", it) })
             listeners += availability.coachResponses(encounter.id, encounter.teamId, { responses = it; loaded("responses") }, { failed("responses", it) })
@@ -84,14 +87,18 @@ fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, guardian: Guar
     BackHandler(enabled = busy) { }
     BackHandler(enabled = !busy, onBack = onBack)
     val current = match
-    val people = if (guardian != null) guardianRoster(entries, guardian.playerId, guardian.playerName, encounter.category) else roster
+    val people = when {
+        guardian != null -> guardianRoster(entries, guardian.playerId, guardian.playerName, encounter.category)
+        anonymous -> guardianRoster(entries, "", "", encounter.category, ANONYMOUS_PLAYER_LABEL)
+        else -> roster
+    }
     val eligible = roster.filter { it.category == current?.category && it.userId in selected }
     val editable = manage && current != null && now < current.kickoff.toDate().time && pending.isEmpty() && failures.isEmpty() && !busy
     val slots = formationSlots(formation)
     val starters = entries.filter { it.kind == "STARTER" }.sortedBy { it.position.removePrefix("P").toIntOrNull() ?: 99 }
     val invalid = when {
         manage -> entries.filter { entry -> eligible.none { it.userId == entry.playerId } }
-        guardian == null -> readOnlyInvalid(entries, roster, current?.category)
+        readsRoster -> readOnlyInvalid(entries, roster, current?.category)
         else -> emptyList()
     }
     // P6: en solo lectura no se muestra a quien ya no está en la categoría; la entrenadora sí lo ve para retirarlo.
@@ -127,10 +134,13 @@ fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, guardian: Guar
         confirmButton = { TextButton(enabled = editable, onClick = { perform(repository.formation(current, pendingFormation!!), "Formación guardada") }) { Text("Cambiar") } },
         dismissButton = { TextButton(enabled = !busy, onClick = { pendingFormation = null }) { Text("Cancelar") } })
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        TextButton(onClick = onBack, enabled = !busy) { Text("← Volver a convocatorias") }
-        Text("Alineación del partido", style = MaterialTheme.typography.headlineSmall)
-        current?.let { Text("vs ${it.opponent} · ${it.category}\n${dateLabel(it.kickoff.toDate().time)}") }
-            ?: Text("El partido ya no está disponible")
+        if (showHeader) {
+            TextButton(onClick = onBack, enabled = !busy) { Text("← Volver a convocatorias") }
+            Text("Alineación del partido", style = MaterialTheme.typography.headlineSmall)
+            current?.let { Text("vs ${it.opponent} · ${it.category}\n${dateLabel(it.kickoff.toDate().time)}") }
+        }
+        if (current == null) Text("El partido ya no está disponible")
+        if (anonymous) Text("Vista de administración: los jugadores se muestran sin nombre.")
         guardian?.let { Text("Consultas como tutor de ${it.playerName}. Los demás jugadores se muestran como \"$TEAMMATE_LABEL\".") }
         if (pending.isNotEmpty() || busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         failures.values.forEach { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -143,7 +153,11 @@ fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, guardian: Guar
         Text("Titulares (${shownStarters.size}/11)", style = MaterialTheme.typography.titleMedium)
         LineupPitch(formation, shownStarters.filter { it !in invalid }.associate { it.position to it.playerId }, people, editable,
             alert = { manage && needsUnavailableConfirmation(statusOf(it)) },
-            shortName = { member -> if (guardian != null && member.userId != guardian.playerId) TEAMMATE_LABEL else member.playerName.take(8) }) { index ->
+            shortName = { member -> when {
+                anonymous -> ANONYMOUS_PLAYER_LABEL
+                guardian != null && member.userId != guardian.playerId -> TEAMMATE_LABEL
+                else -> member.playerName.take(8)
+            } }) { index ->
             editing = starters.find { it.position == "P$index" } ?: MatchLineupEntry("", "STARTER", "P$index")
         }
         if (unavailableShown) Text("⚠ No disp. = respondió No disponible para este partido.")

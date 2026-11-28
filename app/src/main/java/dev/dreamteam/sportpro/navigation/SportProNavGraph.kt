@@ -80,13 +80,7 @@ import dev.dreamteam.sportpro.ui.training.TrainingNavHost
 import dev.dreamteam.sportpro.ui.community.PostCommentsScreen
 import dev.dreamteam.sportpro.ui.events.CatalogScope
 import dev.dreamteam.sportpro.ui.events.EventCatalogManagerScreen
-import dev.dreamteam.sportpro.ui.events.EventDetailScreen
-import dev.dreamteam.sportpro.ui.events.EventEditScreen
-import dev.dreamteam.sportpro.ui.events.EventHistoryScreen
 import dev.dreamteam.sportpro.domain.access.COACH_PENDING_MESSAGE
-import dev.dreamteam.sportpro.ui.events.RegisterEventScreen
-import dev.dreamteam.sportpro.ui.events.MatchesForUs13Screen
-import dev.dreamteam.sportpro.ui.events.MatchDetailUs13Screen
 import dev.dreamteam.sportpro.ui.teams.TeamsScreen
 import dev.dreamteam.sportpro.ui.teams.CreateTeamScreen
 import dev.dreamteam.sportpro.ui.teams.TeamsViewModel
@@ -153,49 +147,7 @@ sealed class SportProRoute(
         fun create(teamId: String, name: String) = "event_catalog/${android.net.Uri.encode(teamId)}?name=${android.net.Uri.encode(name)}"
     }
 
-    // Rutas independientes para US-13 y US-14; no reemplazan Partidos de master.
-    data object MatchesUs13 : SportProRoute("matches_us13", "Eventos del partido")
-    data object MatchDetailUs13 : SportProRoute("match_us13/{matchId}", "Detalle del partido") {
-        const val ARG_MATCH_ID = "matchId"
-        fun create(matchId: String) = "match_us13/$matchId"
-    }
-
-    // ── US-13 · Registro dinámico de eventos en vivo ──
-    data object RegisterEvent : SportProRoute(
-        route = "register_event/{matchId}",
-        title = "Registrar evento"
-    ) {
-        const val ARG_MATCH_ID = "matchId"
-        fun create(matchId: String) = "register_event/$matchId"
-    }
-
-    // ── US-14 · Corrección y anulación con trazabilidad ──
-    data object EventDetail : SportProRoute(
-        route = "event_detail/{matchId}/{eventId}",
-        title = "Detalle del evento"
-    ) {
-        const val ARG_MATCH_ID = "matchId"
-        const val ARG_EVENT_ID = "eventId"
-        fun create(matchId: String, eventId: String) = "event_detail/$matchId/$eventId"
-    }
-
-    data object EventEdit : SportProRoute(
-        route = "event_edit/{matchId}/{eventId}",
-        title = "Corregir evento"
-    ) {
-        const val ARG_MATCH_ID = "matchId"
-        const val ARG_EVENT_ID = "eventId"
-        fun create(matchId: String, eventId: String) = "event_edit/$matchId/$eventId"
-    }
-
-    data object EventHistory : SportProRoute(
-        route = "event_history/{matchId}/{eventId}",
-        title = "Historial del evento"
-    ) {
-        const val ARG_MATCH_ID = "matchId"
-        const val ARG_EVENT_ID = "eventId"
-        fun create(matchId: String, eventId: String) = "event_history/$matchId/$eventId"
-    }
+    // US-13/14: los eventos se abren dentro del detalle del partido (pestaña Partidos → LIVE).
 
     // ── US-19 · Comentarios y reacciones ──
     data object PostComments : SportProRoute(
@@ -412,9 +364,7 @@ fun SportProNavGraph(
                 HomeScreenContent(
                     userEmail = userEmail,
                     onLogout = onLogout,
-                    isLoading = isLoading,
-                    canRegisterEvents = RoleAccess.can(roles, RoleCapability.REGISTER_EVENTS, isCoachApproved),
-                    onOpenMatches = { navController.navigate(SportProRoute.MatchesUs13.route) }
+                    isLoading = isLoading
                 )
             }
 
@@ -559,103 +509,6 @@ fun SportProNavGraph(
                 }
             }
 
-            // US-13: muestra los partidos de demostración mientras se integra
-            // el repositorio real de partidos del equipo.
-            composable(SportProRoute.MatchesUs13.route) {
-                MatchesForUs13Screen(
-                    onBack = { navController.popBackStack() },
-                    onOpenMatch = { matchId ->
-                        navController.navigate(SportProRoute.MatchDetailUs13.create(matchId))
-                    }
-                )
-            }
-
-            composable(
-                SportProRoute.MatchDetailUs13.route,
-                arguments = listOf(
-                    navArgument(SportProRoute.MatchDetailUs13.ARG_MATCH_ID) { type = NavType.StringType }
-                )
-            ) { entry ->
-                val matchId = entry.arguments?.getString(SportProRoute.MatchDetailUs13.ARG_MATCH_ID).orEmpty()
-                MatchDetailUs13Screen(
-                    matchId = matchId,
-                    canRegister = RoleAccess.can(roles, RoleCapability.REGISTER_EVENTS, isCoachApproved),
-                    onBack = { navController.popBackStack() },
-                    onRegister = { navController.navigate(SportProRoute.RegisterEvent.create(matchId)) },
-                    onOpenEvent = { eventId ->
-                        navController.navigate(SportProRoute.EventDetail.create(matchId, eventId))
-                    }
-                )
-            }
-
-            // ───────── US-13 · Registro de eventos en vivo ─────────
-            composable(
-                route = SportProRoute.RegisterEvent.route,
-                arguments = listOf(
-                    navArgument(SportProRoute.RegisterEvent.ARG_MATCH_ID) { type = NavType.StringType }
-                )
-            ) { entry ->
-                RoleGate(roles, RoleCapability.REGISTER_EVENTS, isCoachApproved) {
-                    RegisterEventScreen(
-                        matchId = entry.arguments?.getString(SportProRoute.RegisterEvent.ARG_MATCH_ID).orEmpty(),
-                        onBack = { navController.popBackStack() },
-                        onSaved = { navController.popBackStack() } // vuelve a la cronología
-                    )
-                }
-            }
-
-            // ───────── US-14 · Corrección y anulación ─────────
-            composable(
-                route = SportProRoute.EventDetail.route,
-                arguments = listOf(
-                    navArgument(SportProRoute.EventDetail.ARG_MATCH_ID) { type = NavType.StringType },
-                    navArgument(SportProRoute.EventDetail.ARG_EVENT_ID) { type = NavType.StringType }
-                )
-            ) { entry ->
-                val matchId = entry.arguments?.getString(SportProRoute.EventDetail.ARG_MATCH_ID).orEmpty()
-                val eventId = entry.arguments?.getString(SportProRoute.EventDetail.ARG_EVENT_ID).orEmpty()
-                EventDetailScreen(
-                    matchId = matchId,
-                    eventId = eventId,
-                    canEdit = RoleAccess.can(roles, RoleCapability.EDIT_EVENTS, isCoachApproved),
-                    onBack = { navController.popBackStack() },
-                    onCorrect = { navController.navigate(SportProRoute.EventEdit.create(matchId, eventId)) },
-                    onVoided = { navController.popBackStack() },
-                    onShowHistory = { navController.navigate(SportProRoute.EventHistory.create(matchId, eventId)) }
-                )
-            }
-
-            composable(
-                route = SportProRoute.EventEdit.route,
-                arguments = listOf(
-                    navArgument(SportProRoute.EventEdit.ARG_MATCH_ID) { type = NavType.StringType },
-                    navArgument(SportProRoute.EventEdit.ARG_EVENT_ID) { type = NavType.StringType }
-                )
-            ) { entry ->
-                RoleGate(roles, RoleCapability.EDIT_EVENTS, isCoachApproved) {
-                    EventEditScreen(
-                        matchId = entry.arguments?.getString(SportProRoute.EventEdit.ARG_MATCH_ID).orEmpty(),
-                        eventId = entry.arguments?.getString(SportProRoute.EventEdit.ARG_EVENT_ID).orEmpty(),
-                        onBack = { navController.popBackStack() },
-                        onSaved = { navController.popBackStack() }
-                    )
-                }
-            }
-
-            composable(
-                route = SportProRoute.EventHistory.route,
-                arguments = listOf(
-                    navArgument(SportProRoute.EventHistory.ARG_MATCH_ID) { type = NavType.StringType },
-                    navArgument(SportProRoute.EventHistory.ARG_EVENT_ID) { type = NavType.StringType }
-                )
-            ) { entry ->
-                EventHistoryScreen(
-                    matchId = entry.arguments?.getString(SportProRoute.EventHistory.ARG_MATCH_ID).orEmpty(),
-                    eventId = entry.arguments?.getString(SportProRoute.EventHistory.ARG_EVENT_ID).orEmpty(),
-                    onBack = { navController.popBackStack() }
-                )
-            }
-
             // ───────── US-19 · Comentarios y reacciones ─────────
             composable(
                 route = SportProRoute.PostComments.route,
@@ -677,9 +530,7 @@ fun SportProNavGraph(
 private fun HomeScreenContent(
     userEmail: String,
     onLogout: () -> Unit,
-    isLoading: Boolean,
-    canRegisterEvents: Boolean,
-    onOpenMatches: () -> Unit
+    isLoading: Boolean
 ) {
     Column(
         modifier = Modifier
@@ -733,16 +584,6 @@ private fun HomeScreenContent(
                 )
 
                 Spacer(modifier = Modifier.height(20.dp))
-
-                if (canRegisterEvents) {
-                    Button(
-                        onClick = onOpenMatches,
-                        modifier = Modifier.fillMaxWidth().height(50.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) { Text("PARTIDOS · REGISTRO DE EVENTOS", color = Color.White, fontWeight = FontWeight.Bold) }
-                    Spacer(modifier = Modifier.height(10.dp))
-                }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
