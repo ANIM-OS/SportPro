@@ -22,16 +22,25 @@ class CallupCardStateTest {
     fun withdrawn_isRetirada() =
         assertEquals(CallupCardState.RETIRADA, callupCardState(false, true, now + 60_000, now))
 
+    private val day = 24 * 3_600_000L
+
+    /** US-15: al empezar el partido está "en juego" (antes decía "finalizado" desde el inicio). */
     @Test
-    fun kickoffPassed_isFinalizado() {
-        assertEquals(CallupCardState.FINALIZADO, callupCardState(true, true, now - 1, now))
-        assertEquals(CallupCardState.FINALIZADO, callupCardState(true, true, now, now))
+    fun kickoffPassed_isEnJuegoUntil24h_thenFinalizado() {
+        assertEquals(CallupCardState.EN_JUEGO, callupCardState(true, true, now, now))
+        assertEquals(CallupCardState.EN_JUEGO, callupCardState(true, true, now - day + 1, now))
+        assertEquals(CallupCardState.FINALIZADO, callupCardState(true, true, now - day, now))
     }
+
+    @Test
+    fun endedByCoach_isFinalizadoBefore24h() =
+        assertEquals(CallupCardState.FINALIZADO, callupCardState(true, true, now - 60_000, now, endedAtMillis = now - 1))
 
     @Test
     fun guardianWithoutFixtureAccess_usesEncounterKickoff() {
         assertEquals(CallupCardState.CONVOCADO, callupCardState(true, null, now + 1, now))
-        assertEquals(CallupCardState.FINALIZADO, callupCardState(true, null, now - 1, now))
+        assertEquals(CallupCardState.EN_JUEGO, callupCardState(true, null, now - 1, now))
+        assertEquals(CallupCardState.FINALIZADO, callupCardState(true, null, now - day, now))
     }
 
     @Test

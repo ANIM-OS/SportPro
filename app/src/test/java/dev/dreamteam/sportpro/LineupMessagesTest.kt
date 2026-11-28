@@ -62,6 +62,7 @@ class LineupMessagesTest {
     fun lineupButton_hiddenForWithdrawnOrCancelled() {
         assertTrue(showLineupButton(CallupCardState.CONVOCADO))
         assertTrue(showLineupButton(CallupCardState.FINALIZADO))
+        assertTrue(showLineupButton(CallupCardState.EN_JUEGO))
         assertFalse(showLineupButton(CallupCardState.RETIRADA))
         assertFalse(showLineupButton(CallupCardState.CANCELADO))
         assertFalse(showLineupButton(CallupCardState.SIN_CONFIRMAR))

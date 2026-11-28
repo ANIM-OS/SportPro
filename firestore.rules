@@ -52,10 +52,23 @@ service cloud.firestore {
           && d.get('responseDeadline', d.kickoff) <= d.kickoff
           && d.updatedAt == request.time;
       }
+      // US-15: finalizar el partido. Aparte de validFixture (que exige kickoff futuro): solo la dueña
+      // aprobada, en juego (desde el inicio hasta +24 h), una sola vez y solo endedAt/endedBy/updatedAt.
+      function validFinish() {
+        let d = request.resource.data;
+        let old = resource.data;
+        return callupOwnsTeam(old.teamId) && old.ownerId == request.auth.uid
+          && !('endedAt' in old)
+          && request.time >= old.kickoff
+          && request.time < old.kickoff + duration.value(24, 'h')
+          && d.diff(old).affectedKeys().hasOnly(['endedAt', 'endedBy', 'updatedAt'])
+          && d.endedAt == request.time && d.endedBy == request.auth.uid && d.updatedAt == request.time;
+      }
       allow create: if request.auth != null && validFixture();
-      allow update: if request.auth != null && validFixture()
+      allow update: if request.auth != null && ((validFixture()
         && resource.data.get('responseDeadline', resource.data.kickoff) > request.time
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['opponent', 'kickoff', 'responseDeadline', 'updatedAt']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['opponent', 'kickoff', 'responseDeadline', 'updatedAt']))
+        || validFinish());
       allow delete: if ownsCallupTeam(resource.data.teamId);
       // US-13/14: eventos del partido y su historial (revisions/{version}). Solo la dueña aprobada
       // escribe, con tipos activos del catálogo de ESE equipo y dentro del plazo; nadie anula borrando.
@@ -923,7 +936,9 @@ service cloud.firestore {
           'createdBy', 'createdAt', 'clientCreatedAt', 'updatedBy', 'updatedAt'])
         && d.keys().hasOnly(['typeId', 'typeName', 'minute', 'team', 'playerId', 'playerName', 'notes', 'extras', 'extraNames',
           'teamId', 'category', 'voided', 'voidedBy', 'voidedAt', 'version', 'createdBy', 'createdAt', 'clientCreatedAt',
-          'updatedBy', 'updatedAt'])
+          'updatedBy', 'updatedAt', 'countsAsGoal'])
+        // US-15: copia de "Cuenta como gol"; solo existe (y vale true) en tipos propios del equipo.
+        && (!('countsAsGoal' in d) || (d.countsAsGoal == true && d.typeId.matches('^eq_.*')))
         && d.typeId is string && d.typeId.matches('^[a-z0-9_]{2,40}$')
         && d.typeName is string && d.typeName.size() > 0 && d.typeName.size() <= 40
         && (!('minute' in d) || (d.minute is int && d.minute >= 0 && d.minute <= 130))
@@ -939,12 +954,19 @@ service cloud.firestore {
         && d.teamId == fixture.teamId && d.category == fixture.category
         && d.version is int && d.clientCreatedAt is timestamp;
     }
+    // US-15: countsAsGoal del evento == casilla del tipo propio (los globales nunca la tienen).
+    function eventGoalFlag(d, type) {
+      return d.get('countsAsGoal', false) == (d.typeId.matches('^eq_.*') && type.get('countsAsGoal', false) == true);
+    }
     function validNewEvent(matchId, eventId) {
       let d = request.resource.data;
       let fixture = eventFixture(matchId);
+      let type = eventTypeDoc(fixture.teamId, d.typeId);
       return validEventData(matchId, d, fixture)
         && request.time >= fixture.kickoff && request.time < fixture.kickoff + duration.value(24, 'h')
-        && eventTypeActive(fixture.teamId, d.typeId) && eventRequired(d, eventTypeDoc(fixture.teamId, d.typeId))
+        // US-15: tras finalizar no se registran eventos nuevos (corregir/anular siguen hasta 7 días).
+        && !('endedAt' in fixture)
+        && eventTypeActive(fixture.teamId, d.typeId) && eventRequired(d, type) && eventGoalFlag(d, type)
         && d.voided == false && !d.keys().hasAny(['voidedBy', 'voidedAt']) && d.version == 1
         && d.createdBy == request.auth.uid && d.createdAt == request.time
         && d.updatedBy == request.auth.uid && d.updatedAt == request.time
@@ -967,7 +989,8 @@ service cloud.firestore {
             && d.voidedBy == request.auth.uid && d.voidedAt == request.time)
           : (validEventData(matchId, d, fixture) && !d.keys().hasAny(['voidedBy', 'voidedAt'])
             && (d.typeId == old.typeId || eventTypeActive(fixture.teamId, d.typeId))
-            && eventRequired(d, eventTypeDoc(fixture.teamId, d.typeId))));
+            && eventRequired(d, eventTypeDoc(fixture.teamId, d.typeId))
+            && eventGoalFlag(d, eventTypeDoc(fixture.teamId, d.typeId))));
     }
     // previous = campos editables del evento ANTES del cambio (valor anterior consultable, US-14).
     function samePrevious(p, e) {
@@ -1046,7 +1069,9 @@ service cloud.firestore {
           && d.keys().hasAll(['kind', 'name', 'description', 'requiredCore', 'extraKeys', 'extraFields', 'requiredExtra',
             'active', 'order', 'updatedBy', 'updatedAt'])
           && d.keys().hasOnly(['kind', 'name', 'description', 'requiredCore', 'extraKeys', 'extraFields', 'requiredExtra',
-            'active', 'order', 'updatedBy', 'updatedAt'])
+            'active', 'order', 'updatedBy', 'updatedAt', 'countsAsGoal'])
+          // US-15: casilla "Cuenta como gol" (opcional, booleana; solo en tipos propios).
+          && (!('countsAsGoal' in d) || d.countsAsGoal is bool)
           && validEventTypeFields(d);
       }
       function validTeamOverride() {

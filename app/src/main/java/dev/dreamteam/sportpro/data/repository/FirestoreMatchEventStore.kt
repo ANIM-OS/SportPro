@@ -28,6 +28,8 @@ interface MatchEventStore {
     fun add(ctx: MatchEventContext, event: MatchEventRecord): Task<Void>
     fun correct(before: MatchEventRecord, after: MatchEventRecord, actorId: String): Task<Void>
     fun void(before: MatchEventRecord, actorId: String): Task<Void>
+    /** US-16: lectura única (caché y servidor) para el histórico de estadísticas. */
+    fun fetch(matchId: String): Task<List<MatchEventRecord>>
 }
 
 /** matchFixtures/{matchId}/events/{eventId} + events/{eventId}/revisions/{version}. */
@@ -76,7 +78,9 @@ class FirestoreMatchEventStore(private val db: FirebaseFirestore = FirebaseFires
             "teamId" to ctx.teamId, "category" to ctx.category, "version" to 1L,
             "createdBy" to event.authorId, "createdAt" to FieldValue.serverTimestamp(),
             "clientCreatedAt" to Timestamp(Date(event.createdAtMillis)),
-            "updatedBy" to event.authorId, "updatedAt" to FieldValue.serverTimestamp())
+            "updatedBy" to event.authorId, "updatedAt" to FieldValue.serverTimestamp()) +
+            // US-15: solo se guarda en tipos propios marcados "Cuenta como gol" (las reglas lo comprueban).
+            (if (event.countsAsGoal) mapOf("countsAsGoal" to true) else emptyMap())
         return db.batch()
             .set(ref, data)
             .set(ref.collection("revisions").document("1"), revision("CREATE", emptyMap(), event.authorId))
@@ -89,7 +93,8 @@ class FirestoreMatchEventStore(private val db: FirebaseFirestore = FirebaseFires
         val next = MatchEvents.editableSnapshot(after.copy(voided = false))
         // Los campos opcionales que se vaciaron se borran del documento.
         val removed = listOf("minute", "team", "playerId", "playerName", "notes").filter { it !in next }.associateWith { FieldValue.delete() }
-        val update: Map<String, Any> = (next + removed + mapOf("version" to version.toLong(), "updatedBy" to actorId,
+        val goal: Any = if (after.countsAsGoal) true else FieldValue.delete()
+        val update: Map<String, Any> = (next + removed + mapOf("countsAsGoal" to goal, "version" to version.toLong(), "updatedBy" to actorId,
             "updatedAt" to FieldValue.serverTimestamp())).filterValues { it != null }.mapValues { it.value!! }
         return db.batch()
             .update(ref, update)
@@ -106,6 +111,9 @@ class FirestoreMatchEventStore(private val db: FirebaseFirestore = FirebaseFires
             .set(ref.collection("revisions").document(version.toString()), revision("VOID", MatchEvents.editableSnapshot(before), actorId))
             .commit()
     }
+
+    override fun fetch(matchId: String): Task<List<MatchEventRecord>> =
+        events(matchId).get().continueWith { task -> MatchEvents.chronology(task.result.documents.mapNotNull { fromDoc(matchId, it) }) }
 
     private fun revision(action: String, previous: Map<String, Any?>, actorId: String) =
         mapOf("action" to action, "previous" to previous, "by" to actorId, "at" to FieldValue.serverTimestamp())
@@ -125,7 +133,8 @@ class FirestoreMatchEventStore(private val db: FirebaseFirestore = FirebaseFires
             lastModifiedAtMillis = doc.getTimestamp("updatedAt")?.toDate()?.time.takeIf { (doc.getLong("version") ?: 1L) > 1L },
             version = (doc.getLong("version") ?: 1L).toInt(), playerName = doc.getString("playerName"),
             extraNames = stringMap("extraNames"), voidedBy = doc.getString("voidedBy"),
-            voidedAtMillis = doc.getTimestamp("voidedAt")?.toDate()?.time, pending = doc.metadata.hasPendingWrites())
+            voidedAtMillis = doc.getTimestamp("voidedAt")?.toDate()?.time, pending = doc.metadata.hasPendingWrites(),
+            countsAsGoal = doc.getBoolean("countsAsGoal") == true)
     }
 
     companion object {

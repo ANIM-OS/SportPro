@@ -399,7 +399,7 @@ fun EventEditScreen(
     val current = original
     // El tipo original se sigue ofreciendo aunque se haya desactivado en el catálogo.
     val allTypes = activeCatalog + listOfNotNull(current?.takeIf { o -> activeCatalog.none { it.id == o.typeId } }
-        ?.let { EventType(it.typeId, it.typeName, active = false) })
+        ?.let { EventType(it.typeId, it.typeName, active = false, countsAsGoal = it.countsAsGoal) })
     val players = rememberMatchPlayers(ctx)
     var error by remember { mutableStateOf<String?>(null) }
     // El mensaje de error se borra en cuanto se cambia cualquier campo (la precarga inicial también lo limpia, sin efecto).

@@ -201,9 +201,7 @@ internal fun GuardianCallupCard(row: PlayerCallup, playerName: String, repositor
         val listener = repository.match(row.matchId, { cancelled = false }, { }, { cancelled = true })
         onDispose { listener.remove() }
     }
-    val now by produceState(System.currentTimeMillis()) {
-        while (true) { value = System.currentTimeMillis(); delay(30_000) }
-    }
+    val now = rememberMinuteClock()
     val state = callupCardState(row.selected, if (cancelled) false else null, row.encounter?.kickoff?.toDate()?.time, now)
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

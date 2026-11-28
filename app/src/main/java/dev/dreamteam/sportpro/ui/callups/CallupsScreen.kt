@@ -407,8 +407,9 @@ internal fun PlayerMatchCard(row: PlayerCallup, repository: CallupRepository, on
             { match = null; error = null; loadingMatch = false; cancelled = true })
         onDispose { listener.remove() }
     }
+    val now = rememberMinuteClock()
     val state = callupCardState(row.selected, if (cancelled) false else if (match != null) true else null,
-        match?.kickoff?.toDate()?.time, System.currentTimeMillis())
+        match?.kickoff?.toDate()?.time, now, match?.endedAtMillis)
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(if (state == CallupCardState.CONVOCADO) "Estás convocado" else state.label, style = MaterialTheme.typography.titleSmall)

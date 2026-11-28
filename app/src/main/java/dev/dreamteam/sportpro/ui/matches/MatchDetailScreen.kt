@@ -17,6 +17,7 @@ import dev.dreamteam.sportpro.data.model.EventType
 import dev.dreamteam.sportpro.data.model.MatchEventContext
 import dev.dreamteam.sportpro.data.model.MatchEventRecord
 import dev.dreamteam.sportpro.data.model.MatchEvents
+import dev.dreamteam.sportpro.data.model.MatchStatus
 import dev.dreamteam.sportpro.data.model.MatchTab
 import dev.dreamteam.sportpro.data.model.MatchViewerRole
 import dev.dreamteam.sportpro.data.model.Team
@@ -33,6 +34,7 @@ import dev.dreamteam.sportpro.ui.callups.GuardianCallupCard
 import dev.dreamteam.sportpro.ui.callups.PlayerCallup
 import dev.dreamteam.sportpro.ui.callups.PlayerMatchCard
 import dev.dreamteam.sportpro.ui.callups.dateLabel
+import dev.dreamteam.sportpro.ui.callups.rememberMinuteClock
 import dev.dreamteam.sportpro.ui.events.EventDetailScreen
 import dev.dreamteam.sportpro.ui.events.EventEditScreen
 import dev.dreamteam.sportpro.ui.events.EventHistoryScreen
@@ -104,7 +106,8 @@ fun MatchDetailScreen(entry: MatchEntry, onBack: () -> Unit) {
     var pendingTab by remember { mutableStateOf<MatchTab?>(null) }
     var confirmLeave by remember { mutableStateOf(false) }
     var live by remember { mutableStateOf<LiveScreen?>(null) }
-    val ctx = MatchEventContext(match.id, match.teamId, match.category, match.kickoff.toDate().time, teamName.ifBlank { "Nuestro equipo" }, match.opponent)
+    val ctx = MatchEventContext(match.id, match.teamId, match.category, match.kickoff.toDate().time, teamName.ifBlank { "Nuestro equipo" }, match.opponent,
+        endedAtMillis = match.endedAtMillis)
     // Tutora: guarda una vez su acceso (US-11); sirve para la Alineación y para los eventos (LIVE).
     val guardianAccess = rememberGuardianAccess(entry, enabled = MatchTab.LIVE in access.tabs || MatchTab.LINEUP in access.tabs)
     val canReadEvents = MatchTab.LIVE in access.tabs && (entry.viewer !is MatchViewer.Guardian || guardianAccess == GuardianAccess.READY)
@@ -164,7 +167,7 @@ fun MatchDetailScreen(entry: MatchEntry, onBack: () -> Unit) {
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (tab) {
-                MatchTab.INFO -> InfoTab(entry, match, teamName, cancelled, callupDirty, onCancelled = { onBack() })
+                MatchTab.INFO -> InfoTab(entry, match, teamName, cancelled, callupDirty, callups, onCancelled = { onBack() })
                 MatchTab.CALLUP -> CallupTab(entry, match, callups, adminSelections) { callupDirty = it }
                 MatchTab.LINEUP -> LineupTab(entry, match, guardianAccess, onBack = leave)
                 MatchTab.LIVE -> CompositionLocalProvider(LocalEventLabels provides labels) {
@@ -203,6 +206,26 @@ private fun rememberEventLabels(ctx: MatchEventContext, entry: MatchEntry, event
 
 private enum class GuardianAccess { LOADING, READY, FAILED }
 
+/** Por qué no se puede registrar (antes del inicio, partido finalizado o plazo de 24 h vencido). */
+internal fun registerClosedMessage(now: Long, ctx: MatchEventContext): String = when {
+    now < ctx.kickoffMillis -> "Podrás registrar eventos cuando empiece el partido (${dateLabel(ctx.kickoffMillis)})."
+    ctx.endedAtMillis != null -> "El partido terminó: ya no se registran eventos; puedes corregir o anular hasta 7 días después del inicio."
+    else -> "El plazo para registrar eventos terminó (24 h después del inicio)."
+}
+
+/** Error al finalizar, en español y sin texto técnico. */
+private fun finishErrorMessage(error: Throwable): String {
+    val code = generateSequence(error) { it.cause }.take(6)
+        .firstNotNullOfOrNull { (it as? com.google.firebase.firestore.FirebaseFirestoreException)?.code }
+    return when (code) {
+        com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+            "No se pudo finalizar: el partido ya estaba finalizado o pasaron más de 24 h desde el inicio."
+        com.google.firebase.firestore.FirebaseFirestoreException.Code.UNAVAILABLE ->
+            "Sin conexión. Se finalizará al reconectar."
+        else -> "No se pudo finalizar el partido. Inténtalo de nuevo."
+    }
+}
+
 /** El tutor necesita su acceso (matchLineups/{m}/guardians/{uid}) para leer alineación y eventos. */
 @Composable
 private fun rememberGuardianAccess(entry: MatchEntry, enabled: Boolean): GuardianAccess {
@@ -216,16 +239,36 @@ private fun rememberGuardianAccess(entry: MatchEntry, enabled: Boolean): Guardia
 }
 
 @Composable
-private fun InfoTab(entry: MatchEntry, match: CallupMatch, teamName: String, cancelled: Boolean, callupDirty: Boolean, onCancelled: () -> Unit) {
+private fun InfoTab(entry: MatchEntry, match: CallupMatch, teamName: String, cancelled: Boolean, callupDirty: Boolean,
+    callups: CallupRepository, onCancelled: () -> Unit) {
     var message by remember { mutableStateOf<String?>(null) }
-    val now = System.currentTimeMillis()
+    // US-15: estado único (No iniciado / En juego / Finalizado / Cancelado); el reloj avanza cada minuto.
+    val now = rememberMinuteClock()
+    val status = if (cancelled) MatchStatus.CANCELLED else match.status(now)
+    var confirmFinish by remember { mutableStateOf(false) }
+    var finishing by remember { mutableStateOf(false) }
+    var finishError by remember { mutableStateOf<String?>(null) }
+    if (confirmFinish) AlertDialog(onDismissRequest = { confirmFinish = false },
+        title = { Text("¿Finalizar partido?") },
+        text = { Text("No se puede deshacer; ya no se podrán registrar eventos nuevos. Podrás corregir o anular eventos hasta 7 días después del inicio.") },
+        confirmButton = { TextButton(onClick = {
+            confirmFinish = false; finishing = true; finishError = null
+            callups.finishMatch(match)
+                .addOnFailureListener { finishError = finishErrorMessage(it) }
+                .addOnCompleteListener { finishing = false }
+        }) { Text("Finalizar") } },
+        dismissButton = { TextButton(onClick = { confirmFinish = false }) { Text("Cancelar") } })
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Estado: " + when {
-            cancelled -> "Partido cancelado"
-            !entry.callupSelected -> "Convocatoria retirada"
-            match.kickoff.toDate().time <= now -> "Comenzó"
-            else -> "Programado"
-        }, fontWeight = FontWeight.Bold)
+        Text("Estado: " + status.label, fontWeight = FontWeight.Bold)
+        if (!cancelled && !entry.callupSelected) Text("Convocatoria retirada", fontWeight = FontWeight.Bold)
+        match.endedAtMillis?.let { Text("Finalizado por la entrenadora el ${dateLabel(it)} (hora local).", style = MaterialTheme.typography.bodySmall) }
+        if (status == MatchStatus.FINISHED && match.endedAtMillis == null)
+            Text("Finalizó automáticamente 24 h después del inicio.", style = MaterialTheme.typography.bodySmall)
+        val owner = entry.viewer as? MatchViewer.Owner
+        if (owner != null && match.ownerId == FirebaseAuth.getInstance().currentUser?.uid && MatchStatus.canFinish(match.kickoff.toDate().time, match.endedAtMillis, now)) {
+            Button(onClick = { confirmFinish = true }, enabled = !finishing) { Text(if (finishing) "Finalizando…" else "Finalizar partido") }
+        }
+        finishError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (teamName.isNotBlank()) Text("Equipo: $teamName")
         Text("Rival: ${match.opponent}")
         Text("Categoría: ${match.category}")
@@ -301,10 +344,11 @@ private fun MatchLiveTab(ctx: MatchEventContext, events: List<MatchEventRecord>,
     val labels = LocalEventLabels.current
     val score = MatchEvents.score(events)
     val now by produceState(System.currentTimeMillis()) { while (true) { value = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) } }
+    val status = MatchStatus.of(ctx.kickoffMillis, ctx.endedAtMillis, now)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Marcador", style = MaterialTheme.typography.labelLarge)
+                Text("Marcador · ${status.label}", style = MaterialTheme.typography.labelLarge)
                 Text("${ctx.ownName}  ${score.own} - ${score.opponent}  ${ctx.opponent}", style = MaterialTheme.typography.headlineSmall)
                 if (score.goalsWithoutTeam > 0) Text("${score.goalsWithoutTeam} ${if (score.goalsWithoutTeam == 1) "gol sin equipo no cuenta" else "goles sin equipo no cuentan"} en el marcador.",
                     color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -312,10 +356,9 @@ private fun MatchLiveTab(ctx: MatchEventContext, events: List<MatchEventRecord>,
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (canRegister) {
-            val open = MatchEvents.canRegister(now, ctx.kickoffMillis)
+            val open = MatchEvents.canRegister(now, ctx.kickoffMillis, ctx.endedAtMillis)
             Button(modifier = Modifier.fillMaxWidth(), enabled = open, onClick = onRegister) { Text("Registrar evento") }
-            if (!open) Text(if (now < ctx.kickoffMillis) "Podrás registrar eventos cuando empiece el partido (${dateLabel(ctx.kickoffMillis)})."
-                else "El plazo para registrar eventos terminó (24 h después del inicio).", style = MaterialTheme.typography.bodySmall)
+            if (!open) Text(registerClosedMessage(now, ctx), style = MaterialTheme.typography.bodySmall)
         }
         Text("Cronología", style = MaterialTheme.typography.titleMedium)
         if (events.isEmpty()) Text("Todavía no hay eventos registrados para este partido.")
