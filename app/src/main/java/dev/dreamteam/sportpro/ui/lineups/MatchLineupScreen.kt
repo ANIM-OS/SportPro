@@ -54,7 +54,8 @@ fun MatchLineupScreen(encounter: CallupMatch, canManage: Boolean, onBack: () -> 
     }
     DisposableEffect(encounter.id, canManage) {
         val listeners = mutableListOf(
-            callups.match(encounter.id, { match = it; loaded("match") }, { match = null; failed("match", it) }),
+            callups.match(encounter.id, { match = it; loaded("match") }, { match = null; failed("match", it) },
+                { match = null; failed("match", "El partido fue cancelado") }),
             repository.observeFormation(encounter.id, { formation = it; loaded("formation") }, { failed("formation", it) }),
             repository.observePlayers(encounter.id, { entries = it; loaded("players") }, { entries = emptyList(); failed("players", it) }),
             directory.listenRoster(encounter.teamId, { roster = it; loaded("roster") }, { roster = emptyList(); failed("roster", it) })

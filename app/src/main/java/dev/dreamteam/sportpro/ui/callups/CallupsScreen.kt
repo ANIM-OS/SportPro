@@ -14,6 +14,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.google.firebase.firestore.FirebaseFirestoreException
 import dev.dreamteam.sportpro.data.model.Team
 import dev.dreamteam.sportpro.data.model.TeamMember
 import dev.dreamteam.sportpro.data.repository.TeamDirectoryRepository
@@ -21,6 +22,17 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
+
+/**
+ * La transacción lee la membresía de cada alta y el equipo: si el jugador salió del equipo
+ * o el equipo se borró mientras la pantalla estaba abierta, las reglas niegan esa lectura.
+ */
+internal fun saveCallupErrorMessage(failure: Exception): String {
+    val denied = generateSequence<Throwable>(failure) { it.cause }.take(5)
+        .any { (it as? FirebaseFirestoreException)?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED }
+    return if (denied) "No se guardó la convocatoria: puede que un jugador ya no pertenezca al equipo o que el equipo ya no exista. Revisa la plantilla y vuelve a intentarlo."
+    else "No se guardó la convocatoria. No se aplicó ningún cambio: ${failure.localizedMessage}"
+}
 
 internal fun dateLabel(millis: Long) = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, Locale.forLanguageTag("es-PE")).format(Date(millis))
 
@@ -52,6 +64,9 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
     var editingMatch by remember { mutableStateOf(false) }
     var createMatch by remember { mutableStateOf(false) }
     var confirmExit by remember { mutableStateOf(false) }
+    var confirmCancel by remember { mutableStateOf(false) }
+    val cleanup = remember { MatchCleanup() }
+    val myUid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
     val leave = { if (!busy) { if (dirty) confirmExit = true else onBack() } }
     BackHandler { leave() }
     val team = teams.find { it.id == teamId }
@@ -93,6 +108,19 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
         title = { Text("¿Salir sin guardar?") }, text = { Text("Se perderán los cambios pendientes de la convocatoria.") },
         confirmButton = { TextButton(onClick = onBack) { Text("Salir") } },
         dismissButton = { TextButton(onClick = { confirmExit = false }) { Text("Seguir editando") } })
+    if (confirmCancel && match != null) AlertDialog(onDismissRequest = { if (!busy) confirmCancel = false },
+        title = { Text("¿Cancelar el partido?") },
+        text = { Text("Se eliminarán el partido vs ${match.opponent}, su convocatoria, las respuestas de disponibilidad y la alineación. No se puede deshacer.") },
+        confirmButton = { TextButton(enabled = !busy, onClick = {
+            busy = true; error = null; message = null
+            val cancelled = match
+            cleanup.deleteMatch(com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("matchFixtures").document(cancelled.id), {
+                busy = false; confirmCancel = false; matchId = ""; message = "Partido cancelado: vs ${cancelled.opponent}"
+            }, {
+                busy = false; confirmCancel = false; error = "No se pudo cancelar el partido. Puedes reintentar: ${it.localizedMessage}"
+            })
+        }) { Text(if (busy) "Cancelando…" else "Cancelar partido") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = { confirmCancel = false }) { Text("Volver") } })
     if ((editingMatch || createMatch) && team != null) {
         MatchEditor(team, if (createMatch) null else match, repository,
             onDismiss = { editingMatch = false; createMatch = false },
@@ -118,6 +146,8 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
                 val future = match.kickoff.toDate().time > System.currentTimeMillis()
                 val editableMatch = future && match.responseDeadline.toDate().time > System.currentTimeMillis()
                 OutlinedButton(enabled = !busy && !dirty && editableMatch, onClick = { editingMatch = true }) { Text("Editar datos del partido") }
+                if (future && match.ownerId == myUid) OutlinedButton(enabled = !busy && !dirty, onClick = { confirmCancel = true },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Cancelar partido") }
                 if (!editableMatch && future) Text("El plazo de respuesta terminó; los datos del partido ya no se pueden editar.")
                 if (!future) Text("El partido ya comenzó: la convocatoria es de solo lectura.")
                 if (loadingRoster || loadingSelection) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -143,6 +173,9 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
                     TextButton(enabled = !busy, onClick = { selected = selected.intersect(eligibleIds); dirty = true }) { Text("Retirar selecciones no válidas") }
                 }
                 Text(if (selected.size == 1) "1 jugador seleccionado" else "${selected.size} jugadores seleccionados")
+                if (future && !editableMatch && (selected - savedIds).isNotEmpty()) Text(
+                    "El cierre de respuestas ya pasó: este jugador no podrá confirmar su disponibilidad",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
                 if (dirty) Text("Guarda para seguir seleccionando si alcanzas el límite de cambios por guardado.", style = MaterialTheme.typography.bodySmall)
                 if (!loadingSelection) {
                     val saved = !dirty && !busy && error == null && records.any { it.selected }
@@ -171,7 +204,7 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
                         busy = true; error = null; message = null
                         repository.saveSelections(match, selected, records)
                             .addOnSuccessListener { dirty = false; message = null }
-                            .addOnFailureListener { error = "No se guardó la convocatoria. No se aplicó ningún cambio: ${it.localizedMessage}" }
+                            .addOnFailureListener { error = saveCallupErrorMessage(it) }
                             .addOnCompleteListener { busy = false }
                     }) { Text(if (busy) "Guardando…" else "Guardar convocatoria") }
                 if (dirty) TextButton(enabled = !busy, onClick = {
@@ -277,7 +310,7 @@ private fun MatchEditor(team: Team, existing: CallupMatch?, repository: CallupRe
         },
         confirmButton = { Button(enabled = !busy && category in team.categories && opponent.isNotBlank() && kickoff > now && deadline > now && deadline <= kickoff, onClick = {
             busy = true
-            repository.saveMatch(existing, team.id, category, opponent, kickoff, deadline)
+            repository.saveMatch(existing, team.id, team.name, category, opponent, kickoff, deadline)
                 .addOnSuccessListener { onSaved() }
                 .addOnFailureListener { error = it.localizedMessage; busy = false }
         }) { Text(if (busy) "Guardando…" else "Guardar partido") } },
@@ -306,22 +339,26 @@ private fun PlayerMatchCard(row: PlayerCallup, repository: CallupRepository, onO
     var match by remember { mutableStateOf<CallupMatch?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loadingMatch by remember(row.matchId) { mutableStateOf(true) }
+    var cancelled by remember(row.matchId) { mutableStateOf(false) }
     DisposableEffect(row.matchId) {
-        val listener = repository.match(row.matchId, { match = it; error = null; loadingMatch = false },
-            { match = null; error = it; loadingMatch = false })
+        val listener = repository.match(row.matchId, { match = it; error = null; loadingMatch = false; cancelled = false },
+            { match = null; error = it; loadingMatch = false },
+            { match = null; error = null; loadingMatch = false; cancelled = true })
         onDispose { listener.remove() }
     }
+    val state = callupCardState(row.selected, if (cancelled) false else if (match != null) true else null,
+        match?.kickoff?.toDate()?.time, System.currentTimeMillis())
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(when {
-                !row.selected -> "Convocatoria retirada"
-                match == null -> "Convocatoria sin confirmar"
-                match?.kickoff?.toDate()?.time?.let { it <= System.currentTimeMillis() } == true -> "Partido finalizado"
-                else -> "Estás convocado"
-            })
-            (match ?: row.encounter)?.let { Text("vs ${it.opponent}\n${it.category}\n${dateLabel(it.kickoff.toDate().time)} (hora local)") }
+            Text(if (state == CallupCardState.CONVOCADO) "Estás convocado" else state.label, style = MaterialTheme.typography.titleSmall)
+            // El partido en vivo no guarda el nombre del equipo: se toma de la copia de la convocatoria.
+            (match?.copy(teamName = row.encounter?.teamName.orEmpty()) ?: row.encounter)?.let { Text(encounterLabel(it)) }
                 ?: Text("El encuentro no está disponible")
             if (loadingMatch) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (state == CallupCardState.CANCELADO) {
+                Text("La entrenadora canceló este partido.")
+                return@Column
+            }
             if (!loadingMatch && match == null && row.encounter != null) Text(error ?: "Se muestran los últimos datos guardados; no se pudo confirmar el partido.")
             AvailabilityActions(row, match)
             match?.let { current -> OutlinedButton(onClick = { onOpenLineup(current) }) { Text("Ver alineación del partido") } }

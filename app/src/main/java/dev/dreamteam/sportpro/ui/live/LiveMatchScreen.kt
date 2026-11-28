@@ -110,15 +110,17 @@ private fun PlayerMatch(row: PlayerCallup, repository: CallupRepository) {
     var match by remember(row.matchId) { mutableStateOf<CallupMatch?>(null) }
     var error by remember(row.matchId) { mutableStateOf<String?>(null) }
     var loading by remember(row.matchId) { mutableStateOf(true) }
+    var cancelled by remember(row.matchId) { mutableStateOf(false) }
     DisposableEffect(row.matchId) {
-        val listener = repository.match(row.matchId, { match = it; error = null; loading = false },
-            { match = null; error = it; loading = false })
+        val listener = repository.match(row.matchId, { match = it; error = null; loading = false; cancelled = false },
+            { match = null; error = it; loading = false },
+            { match = null; error = null; loading = false; cancelled = true })
         onDispose { listener.remove() }
     }
     val current = match ?: row.encounter
-    if (current != null) MatchCard(current, null)
+    if (current != null) MatchCard(current, row.encounter?.teamName?.takeIf { it.isNotBlank() }, cancelled)
     if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-    if (!loading && match == null) Text(error ?: "No se pudo confirmar el partido; se muestran los últimos datos guardados.",
+    if (!loading && match == null && !cancelled) Text(error ?: "No se pudo confirmar el partido; se muestran los últimos datos guardados.",
         style = MaterialTheme.typography.bodySmall)
 }
 
@@ -156,18 +158,33 @@ private fun GuardianPlayerMatches(link: GuardianLink, repository: CallupReposito
     Text(link.playerName, style = MaterialTheme.typography.titleSmall)
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     rows.filter { it.selected }.distinctBy { it.matchId }.forEach { row ->
-        row.encounter?.let { encounter -> key(row.id) { MatchCard(encounter, null) } }
+        row.encounter?.let { encounter -> key(row.id) { GuardianMatch(row, encounter, repository) } }
     }
 }
 
 @Composable
-private fun MatchCard(match: CallupMatch, teamName: String?) {
+private fun GuardianMatch(row: PlayerCallup, encounter: CallupMatch, repository: CallupRepository) {
+    // El tutor no lee el partido; el listener solo indica si ya no existe (cancelado).
+    var cancelled by remember(row.matchId) { mutableStateOf(false) }
+    DisposableEffect(row.matchId) {
+        val listener = repository.match(row.matchId, { cancelled = false }, { }, { cancelled = true })
+        onDispose { listener.remove() }
+    }
+    MatchCard(encounter, encounter.teamName.takeIf { it.isNotBlank() }, cancelled)
+}
+
+@Composable
+private fun MatchCard(match: CallupMatch, teamName: String?, cancelled: Boolean = false) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(if (teamName == null) "vs ${match.opponent}" else "$teamName vs ${match.opponent}",
                 style = MaterialTheme.typography.titleMedium)
-            Text("${match.category} · ${dateLabel(match.kickoff.toDate().time)}", style = MaterialTheme.typography.bodyMedium)
-            Text(if (match.kickoff.toDate().time > System.currentTimeMillis()) "Programado" else "Iniciado o finalizado",
+            Text("${match.category} · ${dateLabel(match.kickoff.toDate().time)} (hora local)", style = MaterialTheme.typography.bodyMedium)
+            Text(when {
+                cancelled -> "Partido cancelado"
+                match.kickoff.toDate().time > System.currentTimeMillis() -> "Programado"
+                else -> "Iniciado o finalizado"
+            },
                 style = MaterialTheme.typography.labelMedium)
         }
     }

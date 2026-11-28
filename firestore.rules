@@ -29,9 +29,12 @@ service cloud.firestore {
       return member.teamId == teamId && member.userId == playerId && member.category == category;
     }
     match /matchFixtures/{matchId} {
+      // resource == null: leer un ID inexistente solo revela que no existe (partido cancelado).
       allow read: if request.auth != null && (
-        ownsCallupTeam(resource.data.teamId)
+        resource == null
+        || ownsCallupTeam(resource.data.teamId)
         || callupMember(resource.data.teamId, request.auth.uid, resource.data.category)
+        || isAdmin()
       );
       function validFixture() {
         let d = request.resource.data;
@@ -57,8 +60,13 @@ service cloud.firestore {
     }
     match /matchCallupPlayers/{selectionId} {
       allow read: if request.auth != null && (
-        resource.data.playerId == request.auth.uid || resource.data.ownerId == request.auth.uid
+        // La transacción de "Guardar convocatoria" lee la convocatoria antes de crearla:
+        // solo la dueña del partido ({matchId} = parte antes de '_') puede ver que aún no existe.
+        (resource == null
+          && get(/databases/$(database)/documents/matchFixtures/$(selectionId.split('_')[0])).data.ownerId == request.auth.uid)
+        || resource.data.playerId == request.auth.uid || resource.data.ownerId == request.auth.uid
         || availabilityGuardian(resource.data.playerId)
+        || isAdmin()
       );
       function validSelection() {
         let d = request.resource.data;
@@ -71,14 +79,22 @@ service cloud.firestore {
           && fixture.teamId == d.teamId && fixture.ownerId == d.ownerId
           && fixture.kickoff > request.time
           && d.selected is bool
-          && (d.selected || !existsAfter(/databases/$(database)/documents/matchLineups/$(d.matchId)/players/$(d.playerId)))
-          && (!d.selected || (resource != null && resource.data.selected == true
-              && get(/databases/$(database)/documents/matchFixtures/$(d.matchId)).data != fixture
-              && d.diff(resource.data).affectedKeys().hasOnly(['encounter', 'updatedAt']))
-            || callupMember(d.teamId, d.playerId, fixture.category))
+          // La alineación solo se revisa al pasar de convocado a retirado: una convocatoria
+          // nueva o ya retirada no puede tener asignación (US-11 exige selected == true).
+          && (d.selected || resource == null || resource.data.selected != true
+            || !existsAfter(/databases/$(database)/documents/matchLineups/$(d.matchId)/players/$(d.playerId)))
+          // Crear siempre exige la membresía; al actualizar se puede retirar a un exmiembro.
+          && ((resource == null && callupMember(d.teamId, d.playerId, fixture.category))
+            || (resource != null && (!d.selected
+              || (resource.data.selected == true
+                && get(/databases/$(database)/documents/matchFixtures/$(d.matchId)).data != fixture
+                && d.diff(resource.data).affectedKeys().hasOnly(['encounter', 'updatedAt']))
+              || callupMember(d.teamId, d.playerId, fixture.category))))
           && (!d.keys().hasAny(['encounter']) || (
             d.encounter.keys().hasAll(['opponent', 'category', 'kickoff', 'responseDeadline'])
-            && d.encounter.keys().hasOnly(['opponent', 'category', 'kickoff', 'responseDeadline'])
+            && d.encounter.keys().hasOnly(['opponent', 'category', 'kickoff', 'responseDeadline', 'teamName'])
+            && (!d.encounter.keys().hasAny(['teamName'])
+              || d.encounter.teamName == get(/databases/$(database)/documents/teams/$(d.teamId)).data.name)
             && d.encounter.opponent == fixture.opponent && d.encounter.category == fixture.category
             && d.encounter.kickoff == fixture.kickoff
             && d.encounter.responseDeadline == fixture.get('responseDeadline', fixture.kickoff)))
@@ -87,7 +103,9 @@ service cloud.firestore {
       allow create: if request.auth != null && validSelection();
       allow update: if request.auth != null && validSelection()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['selected', 'encounter', 'updatedAt']);
-      allow delete: if ownsCallupTeam(resource.data.teamId);
+      // La entrenadora que convocó puede borrar aunque el equipo o el partido ya no existan.
+      allow delete: if request.auth != null
+        && (resource.data.ownerId == request.auth.uid || ownsCallupTeam(resource.data.teamId));
     }
 
 
@@ -115,7 +133,10 @@ service cloud.firestore {
         && request.resource.data.teamId == lineupFixture(matchId).teamId
         && request.resource.data.formation in ['4-3-3','4-4-2','3-5-2']
         && request.resource.data.updatedAt == request.time;
-      allow delete: if ownsCallupTeam(lineupFixture(matchId).teamId);
+      // Borrado: también la dueña del partido o del equipo de la alineación (huérfanas).
+      allow delete: if request.auth != null && (lineupFixture(matchId).ownerId == request.auth.uid
+        || ownsCallupTeam(resource.data.teamId)
+        || ownsCallupTeam(lineupFixture(matchId).teamId));
       match /players/{playerId} {
         allow read: if canReadMatchLineup(matchId);
         function validAssignment() {
@@ -137,7 +158,10 @@ service cloud.firestore {
             && d.updatedAt == request.time;
         }
         allow create, update: if canWriteMatchLineup(matchId) && validAssignment();
-        allow delete: if ownsCallupTeam(lineupFixture(matchId).teamId) && (resource.data.kind != 'STARTER'
+        allow delete: if request.auth != null
+          && (get(/databases/$(database)/documents/matchCallupPlayers/$(matchId + '_' + playerId)).data.ownerId == request.auth.uid
+            || ownsCallupTeam(lineupFixture(matchId).teamId))
+          && (resource.data.kind != 'STARTER'
           || !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/slots/$(resource.data.position)));
       }
       match /slots/{position} {
@@ -155,7 +179,10 @@ service cloud.firestore {
             && d.updatedAt == request.time;
         }
         allow create, update: if canWriteMatchLineup(matchId) && validSlot();
-        allow delete: if ownsCallupTeam(lineupFixture(matchId).teamId) && (
+        allow delete: if request.auth != null
+          && (get(/databases/$(database)/documents/matchCallupPlayers/$(matchId + '_' + resource.data.playerId)).data.ownerId == request.auth.uid
+            || ownsCallupTeam(lineupFixture(matchId).teamId))
+          && (
           !existsAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId))
           || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.kind != 'STARTER'
           || getAfter(/databases/$(database)/documents/matchLineups/$(matchId)/players/$(resource.data.playerId)).data.position != position);
@@ -176,7 +203,9 @@ service cloud.firestore {
     match /matchAvailability/{selectionId} {
       allow get: if request.auth != null && (
         availabilityActor(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.playerId)
-        || ownsCallupTeam(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.teamId));
+        || ownsCallupTeam(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.teamId)
+        // US-09: la entrenadora que convocó, para limpiar respuestas huérfanas.
+        || get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.ownerId == request.auth.uid);
       allow list: if request.auth != null && resource.data.ownerId == request.auth.uid
         && ownsCallupTeam(resource.data.teamId);
       function validResponse() {
@@ -200,7 +229,8 @@ service cloud.firestore {
       allow create: if request.auth != null && validResponse();
       allow update: if request.auth != null && validResponse()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedBy', 'updatedAt']);
-      allow delete: if ownsCallupTeam(resource.data.teamId);
+      allow delete: if request.auth != null
+        && (resource.data.ownerId == request.auth.uid || ownsCallupTeam(resource.data.teamId));
     }
 
     // =========================
