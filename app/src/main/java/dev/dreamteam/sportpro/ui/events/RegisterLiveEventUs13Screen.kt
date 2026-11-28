@@ -39,6 +39,8 @@ fun RegisterLiveEventScreen(ctx: MatchEventContext, onBack: () -> Unit, onSaved:
     val players = rememberMatchPlayers(ctx)
     val state = remember(ctx.matchId) { EventFormState() }
     var message by remember { mutableStateOf<String?>(null) }
+    // El mensaje de error se borra en cuanto se cambia cualquier campo.
+    ClearOnFormChange(state) { message = null }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         TextButton(onClick = onBack) { Text("← Volver al partido") }
         Text("Registrar evento", style = MaterialTheme.typography.headlineSmall)
@@ -50,8 +52,9 @@ fun RegisterLiveEventScreen(ctx: MatchEventContext, onBack: () -> Unit, onSaved:
         EventFormFields(state, types, ctx, players)
         message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Button(modifier = Modifier.fillMaxWidth(), enabled = open && types.isNotEmpty(), onClick = {
-            message = MatchEvents.validate(state.typeId, state.minute, state.extras)
             val type = types.firstOrNull { it.id == state.typeId }
+            // Incluye los datos obligatorios del tipo (catálogo del equipo): el error se ve antes de guardar.
+            message = MatchEvents.validateEvent(type, state.typeId, state.minute, state.team, state.playerId, state.notes, state.extras)
             val actor = FirebaseAuth.getInstance().currentUser?.uid
             if (message == null && type != null) {
                 if (actor == null) message = "Inicia sesión para registrar eventos."
