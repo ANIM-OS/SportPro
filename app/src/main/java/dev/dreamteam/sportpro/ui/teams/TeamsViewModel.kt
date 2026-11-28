@@ -664,6 +664,8 @@ class TeamsViewModel : ViewModel() {
         val failure: (Exception) -> Unit = { error ->
             _uiState.update { it.copy(deletingTeamId = null, teamActionError = error.localizedMessage ?: "No se pudo eliminar el equipo. Puedes reintentar.") }
         }
+        // US-12: el catálogo del equipo es una subcolección; se borra antes que el equipo para no dejar huérfanos.
+        dev.dreamteam.sportpro.data.repository.EventCatalogFirestoreRepository.deleteTeamCatalog(firestore, team.id, {
         deleteRelated("teamJoinRequests", team.id, {
         deleteRelated("teamJoinCodes", team.id, {
           deleteRelated("teamLineups", team.id, {
@@ -691,6 +693,7 @@ class TeamsViewModel : ViewModel() {
             }, failure)
            }, failure)
           }, failure)
+        }, failure)
         }, failure)
         }, failure)
     }

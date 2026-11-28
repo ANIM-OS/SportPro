@@ -49,6 +49,7 @@ fun TeamsScreen(
     canRespondAsGuardian: Boolean = false,
     newlyCreatedTeamId: String? = null,
     onNewTeamOpened: () -> Unit = {},
+    onOpenEventCatalog: (Team) -> Unit = {},
     viewModel: TeamsViewModel = viewModel()
 ) {
     var showCallupDraft by remember { mutableStateOf(false) }
@@ -365,7 +366,10 @@ fun TeamsScreen(
                         onPhoto = { photoTeam = team; photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                         isUploadingPhoto = uiState.isUploadingPhoto,
                         isDeleting = uiState.deletingTeamId == team.id,
-                        onManage = { selectedTeamId = team.id }
+                        onManage = { selectedTeamId = team.id },
+                        // US-12: catálogo de eventos del equipo, solo dueña aprobada y equipos (no academias).
+                        onEventCatalog = if (canCreateTeam && TeamAccess.canManage(team, uiState.currentUserId) && team.type == "EQUIPO")
+                            ({ onOpenEventCatalog(team) }) else null
                     )
                 }
 
@@ -457,7 +461,8 @@ fun TeamCard(
     onPhoto: () -> Unit,
     isUploadingPhoto: Boolean,
     isDeleting: Boolean,
-    onManage: () -> Unit
+    onManage: () -> Unit,
+    onEventCatalog: (() -> Unit)? = null
 ) {
     val badgeColor = MaterialTheme.colorScheme.secondaryContainer
     val textColor = MaterialTheme.colorScheme.onSecondaryContainer
@@ -565,6 +570,13 @@ fun TeamCard(
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
             ) {
                 Text("Plantilla y alineación general", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+            }
+
+            onEventCatalog?.let {
+                OutlinedButton(onClick = it, enabled = !isDeleting,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) {
+                    Text("Catálogo de eventos", style = MaterialTheme.typography.labelLarge)
+                }
             }
 
             if (canManage) {

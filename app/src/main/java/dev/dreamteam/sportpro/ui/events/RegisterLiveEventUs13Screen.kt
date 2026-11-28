@@ -16,18 +16,31 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.firebase.auth.FirebaseAuth
-import dev.dreamteam.sportpro.data.repository.EventCatalogRepository
+import dev.dreamteam.sportpro.data.model.CoreFields
+import dev.dreamteam.sportpro.data.model.EventType
+import dev.dreamteam.sportpro.data.model.ExtraKinds
+import dev.dreamteam.sportpro.data.repository.EventCatalogFirestoreRepository
 import dev.dreamteam.sportpro.data.repository.LiveEventRepository
 import dev.dreamteam.sportpro.data.repository.MatchEventRecord
 
-/** US-13: usa los tipos ACTIVOS de US-12. El registro se guarda localmente, sin enviar a Firebase todavía. */
+/**
+ * US-13: ofrece los tipos ACTIVOS del catálogo de US-12 (Firestore, en vivo) del equipo del partido o,
+ * si el partido no tiene equipo, los globales. Los eventos aún se guardan en el celular (parte 3).
+ * Los obligatorios del tipo se marcan con * pero todavía no se exigen.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RegisterLiveEventUs13Screen(matchId: String, onBack: () -> Unit, onSaved: () -> Unit) {
     val context = LocalContext.current
-    val catalogRepo = remember(context) { EventCatalogRepository(context) }
+    val catalogRepo = remember { EventCatalogFirestoreRepository() }
     val eventRepo = remember(context) { LiveEventRepository(context) }
-    val activeTypes = remember(matchId) { catalogRepo.activeTypes() }
+    // Los partidos de esta pantalla aún no tienen equipo (parte 2): se usan los tipos globales.
+    val matchTeamId: String? = null
+    var activeTypes by remember(matchId) { mutableStateOf<List<EventType>>(emptyList()) }
+    DisposableEffect(matchId, matchTeamId) {
+        val listener = catalogRepo.listenActive(matchTeamId) { activeTypes = it }
+        onDispose { listener.remove() }
+    }
     var chosenTypeId by remember { mutableStateOf("") }
     var minute by remember { mutableStateOf("") }
     var selectedTeam by remember { mutableStateOf("") }
@@ -44,7 +57,7 @@ fun RegisterLiveEventUs13Screen(matchId: String, onBack: () -> Unit, onSaved: ()
         Text("${match?.homeTeam ?: "Partido"} vs ${match?.opponent ?: matchId}",
             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))
-        Text("Registro local: los eventos no se sincronizan todavía con Firebase.",
+        Text("Por ahora los eventos se guardan solo en este celular.",
             color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
         Spacer(Modifier.height(16.dp))
         Card(shape = RoundedCornerShape(14.dp),
@@ -54,7 +67,7 @@ fun RegisterLiveEventUs13Screen(matchId: String, onBack: () -> Unit, onSaved: ()
                 Text("Nuevo evento", fontSize = 17.sp, fontWeight = FontWeight.Bold)
                 Text("TIPO DE EVENTO *", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                 if (activeTypes.isEmpty()) {
-                    Text("No hay eventos activos. Activa algún tipo en Catálogo de eventos.", color = MaterialTheme.colorScheme.error)
+                    Text("No hay tipos de evento activos. Actívalos en el catálogo de eventos del equipo.", color = MaterialTheme.colorScheme.error)
                 } else {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         activeTypes.forEach { type ->
@@ -70,7 +83,9 @@ fun RegisterLiveEventUs13Screen(matchId: String, onBack: () -> Unit, onSaved: ()
                         }
                     }
                 }
-                Text("MINUTO (OPCIONAL)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                fun fieldLabel(field: String) = CoreFields.label(field).uppercase() +
+                    if (selectedType?.requiredCore?.contains(field) == true) " *" else " (OPCIONAL)"
+                Text(fieldLabel(CoreFields.MINUTE), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedTextField(
                     value = minute,
                     onValueChange = { if (it.length <= 3 && it.all(Char::isDigit)) minute = it },
@@ -78,7 +93,7 @@ fun RegisterLiveEventUs13Screen(matchId: String, onBack: () -> Unit, onSaved: ()
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
-                Text("EQUIPO (OPCIONAL)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(fieldLabel(CoreFields.TEAM), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(match?.homeTeam ?: "Local", match?.awayTeam ?: "Visitante", "Sin especificar").forEachIndexed { index, name ->
                         val value = if (index == 2) "" else name
@@ -89,28 +104,28 @@ fun RegisterLiveEventUs13Screen(matchId: String, onBack: () -> Unit, onSaved: ()
                 }
                 OutlinedTextField(
                     value = player, onValueChange = { player = it },
-                    label = { Text("Jugador involucrado (opcional)") },
+                    label = { Text("Jugador involucrado" + if (selectedType?.requiredCore?.contains(CoreFields.PLAYER) == true) " *" else " (opcional)") },
                     placeholder = { Text("Nombre o identificador") },
                     modifier = Modifier.fillMaxWidth(), singleLine = true
                 )
-                // Tipos personalizados y campos configurados en US-12 se muestran sin rehacer este formulario.
-                val standardFields = setOf("jugadorid", "minuto", "favor", "color", "jugadorsaleid", "jugadorentraid")
-                selectedType?.requiredFields?.filterNot { it.lowercase() in standardFields }?.forEach { field ->
-                    OutlinedTextField(
-                        value = extraFields[field].orEmpty(),
-                        onValueChange = { extraFields[field] = it },
-                        label = { Text("$field (opcional en US-13)") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                if (selectedType?.requiredFields?.contains("color") == true) {
-                    Text("COLOR DE TARJETA (OPCIONAL)", fontSize = 11.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("Amarilla", "Roja").forEach { color ->
-                            FilterChip(selected = extraFields["color"] == color,
-                                onClick = { extraFields["color"] = color }, label = { Text(color) })
+                // Datos adicionales del tipo (US-12), con su etiqueta y su clase; la clave no se muestra.
+                selectedType?.extraFields?.forEach { field ->
+                    val label = field.label + if (field.required) " *" else " (opcional)"
+                    if (field.kind == ExtraKinds.CHOICE) {
+                        Text(label.uppercase(), fontSize = 11.sp)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            field.options.forEach { option ->
+                                FilterChip(selected = extraFields[field.key] == option,
+                                    onClick = { extraFields[field.key] = option }, label = { Text(option) })
+                            }
                         }
-                    }
+                    } else OutlinedTextField(
+                        value = extraFields[field.key].orEmpty(),
+                        onValueChange = { v -> if (field.kind != ExtraKinds.NUMBER || v.all { it.isDigit() || it == '.' }) extraFields[field.key] = v.take(100) },
+                        label = { Text(label) },
+                        keyboardOptions = KeyboardOptions(keyboardType = if (field.kind == ExtraKinds.NUMBER) KeyboardType.Number else KeyboardType.Text),
+                        singleLine = true, modifier = Modifier.fillMaxWidth()
+                    )
                 }
                 OutlinedTextField(
                     value = notes, onValueChange = { notes = it },

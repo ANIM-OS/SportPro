@@ -446,17 +446,25 @@ fun EventEditScreen(
         LiveEventRepository(context)
     }
 
-    val catalog = remember(context) {
-        EventCatalogRepository(context)
+    val catalog = remember {
+        EventCatalogFirestoreRepository()
     }
 
     val original = remember(matchId, eventId) {
         repo.find(matchId, eventId)
     }
 
-    val allTypes = remember {
-        catalog.load()
+    // US-12: tipos activos del catálogo en Firestore (globales mientras el partido no tenga equipo).
+    // El tipo original se sigue ofreciendo aunque se haya desactivado.
+    var activeCatalog by remember {
+        mutableStateOf<List<dev.dreamteam.sportpro.data.model.EventType>>(emptyList())
     }
+    DisposableEffect(Unit) {
+        val listener = catalog.listenActive(null) { activeCatalog = it }
+        onDispose { listener.remove() }
+    }
+    val allTypes = activeCatalog + listOfNotNull(original?.takeIf { o -> activeCatalog.none { it.id == o.typeId } }
+        ?.let { dev.dreamteam.sportpro.data.model.EventType(it.typeId, it.typeName, active = false) })
 
     var typeId by remember {
         mutableStateOf(original?.typeId.orEmpty())
