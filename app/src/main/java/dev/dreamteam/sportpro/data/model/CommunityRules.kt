@@ -1,5 +1,7 @@
 package dev.dreamteam.sportpro.data.model
 
+import dev.dreamteam.sportpro.data.repository.CommunityRepository
+
 /** Un equipo del usuario (dueño o miembro) con su academia vinculada, si la tiene. */
 data class CommunityTeamInfo(val id: String, val name: String, val type: String, val academyId: String? = null)
 
@@ -53,6 +55,35 @@ object CommunityRules {
     /** Lo que se muestra: activas y no ocultadas; las propias ocultas también (con aviso). */
     fun visible(posts: List<CommunityPost>, viewerId: String): List<CommunityPost> =
         posts.filter { (it.active && !it.moderated) || it.authorId == viewerId }
+
+    // ── US-19: comentarios, reacciones y reportes ──
+    const val MAX_COMMENT = 300
+    const val MAX_REASON = 500
+    const val COMMENT_HIDDEN_LABEL = "Ocultado por moderación"
+    val REPORT_REASONS = listOf("Contenido inapropiado", "Acoso o insulto", "Datos personales", "Spam", "Otro")
+
+    fun validateComment(text: String): String? =
+        if (text.trim().isEmpty() || text.trim().length > MAX_COMMENT) "Escribe entre 1 y $MAX_COMMENT caracteres" else null
+
+    fun validateReason(reason: String): String? =
+        if (reason.trim().isEmpty() || reason.trim().length > MAX_REASON) "Elige un motivo para el reporte." else null
+
+    /** Une visibles y propios sin repetir, en orden de fecha (los pendientes sin hora al final). */
+    fun mergeComments(list: List<CommunityRepository.PostComment>): List<CommunityRepository.PostComment> =
+        list.groupBy { it.id }.values.map { same -> same.firstOrNull { it.pending } ?: same.first() }
+            .sortedBy { it.createdAt?.toDate()?.time ?: Long.MAX_VALUE }
+
+    /** El autor ve sus comentarios ocultos con aviso; los demás no los reciben. */
+    fun commentNotice(comment: CommunityRepository.PostComment, viewerId: String): String? =
+        if (comment.moderated && comment.authorId == viewerId) COMMENT_HIDDEN_LABEL else null
+
+    /** REPORTAR: no en los propios ni en los ya ocultos. */
+    fun canReport(comment: CommunityRepository.PostComment, viewerId: String, canEngage: Boolean): Boolean =
+        canEngage && viewerId.isNotBlank() && comment.authorId != viewerId && !comment.moderated && !comment.pending
+
+    /** Comentar o reaccionar: rol habilitado y publicación activa y no ocultada. */
+    fun canInteract(post: CommunityPost?, canEngage: Boolean): Boolean =
+        canEngage && post != null && post.active && !post.moderated
 
     fun hiddenNotice(post: CommunityPost, viewerId: String): String? =
         if ((post.moderated || !post.active) && post.authorId == viewerId) HIDDEN_LABEL else null

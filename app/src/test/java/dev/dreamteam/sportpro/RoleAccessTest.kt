@@ -45,8 +45,13 @@ class RoleAccessTest {
         assertFalse(RoleAccess.can(roles, RoleCapability.CREATE_TEAM, coachApproved = false))
     }
 
+    /** US-19: comentar y reaccionar exige rol Jugador o Entrenador aprobado (igual que las reglas). */
     @Test
-    fun unapprovedCoach_canStillComment() {
-        assertTrue(RoleAccess.can(setOf(AppRole.COACH), RoleCapability.COMMENT_POST, coachApproved = false))
+    fun comment_onlyPlayerOrApprovedCoach() {
+        assertFalse(RoleAccess.can(setOf(AppRole.COACH), RoleCapability.COMMENT_POST, coachApproved = false))
+        assertTrue(RoleAccess.can(setOf(AppRole.COACH), RoleCapability.COMMENT_POST, coachApproved = true))
+        assertTrue(RoleAccess.can(setOf(AppRole.PLAYER), RoleCapability.COMMENT_POST, coachApproved = false))
+        assertFalse(RoleAccess.can(setOf(AppRole.PARENT), RoleCapability.COMMENT_POST, coachApproved = false))
+        assertTrue(RoleAccess.can(setOf(AppRole.PLAYER, AppRole.PARENT), RoleCapability.COMMENT_POST, coachApproved = false))
     }
 }

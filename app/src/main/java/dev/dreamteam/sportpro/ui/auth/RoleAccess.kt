@@ -41,7 +41,8 @@ object RoleAccess {
             RoleCapability.MANAGE_EVENT_CATALOG -> approvedCoach
             RoleCapability.REGISTER_EVENTS -> approvedCoach
             RoleCapability.EDIT_EVENTS -> approvedCoach
-            RoleCapability.COMMENT_POST -> roles.isNotEmpty()
+            // US-19: mismo criterio que las reglas (canEngageCommunity): jugador o entrenador aprobado.
+            RoleCapability.COMMENT_POST -> AppRole.PLAYER in roles || approvedCoach
             RoleCapability.PUBLISH_TRYOUT -> approvedCoach
         }
     }

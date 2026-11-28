@@ -140,11 +140,11 @@ out('consulta sin filtros → permission-denied', unfiltered === 'permission-den
 
 // ---------- 3. Ocultas y comentarios (US-19) ----------
 console.log('\n--- 3. Moderación y comentarios ---');
-await expectOk('miembro comenta en EQUIPO', addDoc(collection(p1.db, 'communityPosts', teamPostId, 'comments'), { authorId: p1.uid, authorName: 'Paula', text: 'Bien', createdAt: serverTimestamp(), moderated: false }));
+await expectOk('miembro comenta en EQUIPO', addDoc(collection(p1.db, 'communityPosts', teamPostId, 'comments'), { authorId: p1.uid, authorName: p1.display, text: 'Bien', createdAt: serverTimestamp(), moderated: false }));
 await expectDenied('tutora NO comenta (solo lee)', addDoc(collection(guardian.db, 'communityPosts', teamPostId, 'comments'), { authorId: guardian.uid, authorName: 'Tita', text: 'Hola', createdAt: serverTimestamp(), moderated: false }));
 await expectDenied('tutora NO da like', setDoc(doc(guardian.db, 'communityPosts', teamPostId, 'likes', guardian.uid), { userId: guardian.uid, createdAt: serverTimestamp() }));
 await checkQ('tutora lee comentarios (peor caso: 8 documentos)', query(collection(guardian.db, 'communityPosts', teamPostId, 'comments'), where('moderated', '==', false)), '1 docs');
-await expectOk('miembro con academyAccess comenta en la ACADEMIA', addDoc(collection(p1.db, 'communityPosts', academyPostId, 'comments'), { authorId: p1.uid, authorName: 'Paula', text: 'Ok', createdAt: serverTimestamp(), moderated: false }));
+await expectOk('miembro con academyAccess comenta en la ACADEMIA', addDoc(collection(p1.db, 'communityPosts', academyPostId, 'comments'), { authorId: p1.uid, authorName: p1.display, text: 'Ok', createdAt: serverTimestamp(), moderated: false }));
 await expectOk('miembro da like en la ACADEMIA', setDoc(doc(p1.db, 'communityPosts', academyPostId, 'likes', p1.uid), { userId: p1.uid, createdAt: serverTimestamp() }));
 await expectDenied('la autora no puede ocultar su publicación', updateDoc(doc(p1.db, 'communityPosts', publicId), { moderated: true }));
 await expectDenied('nadie edita el contenido (autora)', updateDoc(doc(p1.db, 'communityPosts', publicId), { content: 'otro' }));
