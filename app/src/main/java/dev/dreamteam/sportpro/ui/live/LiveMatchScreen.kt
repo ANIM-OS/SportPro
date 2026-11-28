@@ -49,9 +49,9 @@ fun LiveMatchScreen(isCoach: Boolean, isPlayer: Boolean, isGuardian: Boolean) {
     var opened by remember { mutableStateOf<MatchEntry?>(null) }
     var isAdmin by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { MonthlyFeeRepository().checkAdmin { isAdmin = it } }
-    // Los eventos de los antiguos partidos de demostración no pertenecen a ningún partido real: se borran una vez.
+    // Los eventos ahora viven en Firestore: los que se guardaban solo en el celular se descartan una vez (D4).
     val context = LocalContext.current
-    val removedDemo = remember { LiveEventRepository(context).removeDemoEvents() }
+    val removedLocal = remember { LiveEventRepository(context).discardLocalEvents() }
     opened?.let { entry ->
         MatchDetailScreen(entry, onBack = { opened = null })
         return
@@ -63,7 +63,7 @@ fun LiveMatchScreen(isCoach: Boolean, isPlayer: Boolean, isGuardian: Boolean) {
     ) {
         Text("Partidos", style = MaterialTheme.typography.headlineSmall)
         Text("Toca un partido para ver su convocatoria, alineación y eventos.", style = MaterialTheme.typography.bodyMedium)
-        if (removedDemo > 0) Text("Se eliminaron $removedDemo eventos de prueba guardados en este celular.",
+        if (removedLocal > 0) Text("Se descartaron $removedLocal eventos que estaban guardados solo en este celular. Desde ahora los eventos se comparten con todos.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
         if (isCoach) CoachMatches(open)
         if (isPlayer) PlayerMatches(open)

@@ -21,7 +21,7 @@ import dev.dreamteam.sportpro.data.model.MatchTab
 import dev.dreamteam.sportpro.data.model.MatchViewerRole
 import dev.dreamteam.sportpro.data.model.Team
 import dev.dreamteam.sportpro.data.repository.EventCatalogFirestoreRepository
-import dev.dreamteam.sportpro.data.repository.LiveEventRepository
+import dev.dreamteam.sportpro.data.repository.FirestoreMatchEventStore
 import dev.dreamteam.sportpro.data.repository.MatchLineupRepository
 import dev.dreamteam.sportpro.ui.callups.AvailabilityRepository
 import dev.dreamteam.sportpro.ui.callups.AvailabilityResponse
@@ -105,7 +105,20 @@ fun MatchDetailScreen(entry: MatchEntry, onBack: () -> Unit) {
     var confirmLeave by remember { mutableStateOf(false) }
     var live by remember { mutableStateOf<LiveScreen?>(null) }
     val ctx = MatchEventContext(match.id, match.teamId, match.category, match.kickoff.toDate().time, teamName.ifBlank { "Nuestro equipo" }, match.opponent)
-    val labels = rememberEventLabels(ctx, entry.role == MatchViewerRole.OWNER)
+    // Tutora: guarda una vez su acceso (US-11); sirve para la Alineación y para los eventos (LIVE).
+    val guardianAccess = rememberGuardianAccess(entry, enabled = MatchTab.LIVE in access.tabs || MatchTab.LINEUP in access.tabs)
+    val canReadEvents = MatchTab.LIVE in access.tabs && (entry.viewer !is MatchViewer.Guardian || guardianAccess == GuardianAccess.READY)
+    val store = remember { FirestoreMatchEventStore() }
+    var events by remember(entry.match.id) { mutableStateOf<List<MatchEventRecord>>(emptyList()) }
+    var eventsError by remember(entry.match.id) { mutableStateOf<String?>(null) }
+    var writeError by remember(entry.match.id) { mutableStateOf<String?>(null) }
+    DisposableEffect(entry.match.id, canReadEvents) {
+        val subscription = if (canReadEvents) store.observe(match.id, { events = it; eventsError = null }, { eventsError = it }) else null
+        onDispose { subscription?.remove() }
+    }
+    val labels = rememberEventLabels(ctx, entry, events)
+    val canCorrect = access.canEditEvents && MatchEvents.canCorrect(System.currentTimeMillis(), ctx.kickoffMillis)
+    val reportError: (String) -> Unit = { writeError = it }
     val leave = { if (callupDirty) confirmLeave = true else onBack() }
 
     // Pantallas de eventos (US-13/14) dentro del partido.
@@ -113,10 +126,12 @@ fun MatchDetailScreen(entry: MatchEntry, onBack: () -> Unit) {
         BackHandler { live = if (screen is LiveScreen.Edit || screen is LiveScreen.History) LiveScreen.Event((screen as? LiveScreen.Edit)?.id ?: (screen as LiveScreen.History).id) else null }
         CompositionLocalProvider(LocalEventLabels provides labels) {
             when (screen) {
-                LiveScreen.Register -> RegisterLiveEventScreen(ctx, onBack = { live = null }, onSaved = { live = null })
-                is LiveScreen.Event -> EventDetailScreen(match.id, screen.id, canEdit = access.canEditEvents, onBack = { live = null },
-                    onCorrect = { live = LiveScreen.Edit(screen.id) }, onVoided = { live = null }, onShowHistory = { live = LiveScreen.History(screen.id) })
-                is LiveScreen.Edit -> EventEditScreen(ctx, screen.id, onBack = { live = LiveScreen.Event(screen.id) }, onSaved = { live = LiveScreen.Event(screen.id) })
+                LiveScreen.Register -> RegisterLiveEventScreen(ctx, onBack = { live = null }, onSaved = { writeError = null; live = null }, onError = reportError)
+                is LiveScreen.Event -> EventDetailScreen(match.id, screen.id, canEdit = canCorrect, onBack = { live = null },
+                    onCorrect = { live = LiveScreen.Edit(screen.id) }, onVoided = { writeError = null; live = null },
+                    onShowHistory = { live = LiveScreen.History(screen.id) }, onError = reportError)
+                is LiveScreen.Edit -> EventEditScreen(ctx, screen.id, onBack = { live = LiveScreen.Event(screen.id) },
+                    onSaved = { writeError = null; live = LiveScreen.Event(screen.id) }, onError = reportError)
                 is LiveScreen.History -> EventHistoryScreen(match.id, screen.id, onBack = { live = LiveScreen.Event(screen.id) })
             }
         }
@@ -151,27 +166,53 @@ fun MatchDetailScreen(entry: MatchEntry, onBack: () -> Unit) {
             when (tab) {
                 MatchTab.INFO -> InfoTab(entry, match, teamName, cancelled, callupDirty, onCancelled = { onBack() })
                 MatchTab.CALLUP -> CallupTab(entry, match, callups, adminSelections) { callupDirty = it }
-                MatchTab.LINEUP -> LineupTab(entry, match, onBack = leave)
+                MatchTab.LINEUP -> LineupTab(entry, match, guardianAccess, onBack = leave)
                 MatchTab.LIVE -> CompositionLocalProvider(LocalEventLabels provides labels) {
-                    MatchLiveTab(ctx, canEdit = access.canEditEvents, onRegister = { live = LiveScreen.Register },
-                        onOpenEvent = { live = LiveScreen.Event(it) })
+                    when {
+                        entry.viewer is MatchViewer.Guardian && guardianAccess == GuardianAccess.FAILED ->
+                            Text(GUARDIAN_LINEUP_DENIED, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
+                        !canReadEvents -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(16.dp))
+                        else -> MatchLiveTab(ctx, events, eventsError ?: writeError, canRegister = access.canEditEvents,
+                            onRegister = { live = LiveScreen.Register }, onOpenEvent = { live = LiveScreen.Event(it) })
+                    }
                 }
             }
         }
     }
 }
 
-/** Nombres para mostrar eventos: la dueña lee la plantilla; los demás no ven nombres de otros. */
+/**
+ * Nombres de los eventos según el rol (D3, igual que la Alineación de US-11): la dueña ve la plantilla
+ * y las copias; el jugador, las copias guardadas en el evento; la tutora, solo a su jugador (el resto
+ * "Compañero"); el admin, ninguno ("Jugador").
+ */
 @Composable
-private fun rememberEventLabels(ctx: MatchEventContext, readsRoster: Boolean): EventLabels {
-    val players = rememberMatchPlayers(ctx, enabled = readsRoster)
+private fun rememberEventLabels(ctx: MatchEventContext, entry: MatchEntry, events: List<MatchEventRecord>): EventLabels {
+    val players = rememberMatchPlayers(ctx, enabled = entry.role == MatchViewerRole.OWNER)
     var types by remember(ctx.teamId) { mutableStateOf<List<EventType>>(emptyList()) }
     DisposableEffect(ctx.teamId) {
         val listener = EventCatalogFirestoreRepository().listenActive(ctx.teamId) { types = it }
         onDispose { listener.remove() }
     }
     val extraLabels = types.flatMap { it.extraFields }.associate { it.key to it.label }
-    return EventLabels(ctx.ownName, ctx.opponent, players.names, extraLabels)
+    val guardian = entry.viewer as? MatchViewer.Guardian
+    val (names, unknown) = MatchEvents.visibleNames(entry.role, events, players.names,
+        guardian?.row?.playerId.orEmpty(), guardian?.playerName.orEmpty())
+    return EventLabels(ctx.ownName, ctx.opponent, names, extraLabels, unknown)
+}
+
+private enum class GuardianAccess { LOADING, READY, FAILED }
+
+/** El tutor necesita su acceso (matchLineups/{m}/guardians/{uid}) para leer alineación y eventos. */
+@Composable
+private fun rememberGuardianAccess(entry: MatchEntry, enabled: Boolean): GuardianAccess {
+    val guardian = entry.viewer as? MatchViewer.Guardian ?: return GuardianAccess.READY
+    var state by remember(entry.match.id) { mutableStateOf(GuardianAccess.LOADING) }
+    LaunchedEffect(entry.match.id, enabled) {
+        if (enabled) MatchLineupRepository().openAsGuardian(entry.match.id, guardian.row.playerId)
+            .addOnSuccessListener { state = GuardianAccess.READY }.addOnFailureListener { state = GuardianAccess.FAILED }
+    }
+    return state
 }
 
 @Composable
@@ -235,45 +276,31 @@ private fun AdminCallupSummary(matchId: String, selections: List<PlayerCallup>) 
 }
 
 @Composable
-private fun LineupTab(entry: MatchEntry, match: CallupMatch, onBack: () -> Unit) {
+private fun LineupTab(entry: MatchEntry, match: CallupMatch, guardianAccess: GuardianAccess, onBack: () -> Unit) {
     val myUid = FirebaseAuth.getInstance().currentUser?.uid
     when (val viewer = entry.viewer) {
         is MatchViewer.Owner -> MatchLineupScreen(match, canManage = match.ownerId == myUid, showHeader = false, onBack = onBack)
         is MatchViewer.Player -> MatchLineupScreen(match, canManage = false, showHeader = false, onBack = onBack)
         MatchViewer.Admin -> MatchLineupScreen(match, canManage = false, showHeader = false, anonymous = true, onBack = onBack)
-        is MatchViewer.Guardian -> {
-            // Igual que el botón de su tarjeta (US-11): primero se guarda el acceso del tutor.
-            var ready by remember(match.id) { mutableStateOf(false) }
-            var failed by remember(match.id) { mutableStateOf(false) }
-            LaunchedEffect(match.id) {
-                MatchLineupRepository().openAsGuardian(match.id, viewer.row.playerId)
-                    .addOnSuccessListener { ready = true }.addOnFailureListener { failed = true }
-            }
-            when {
-                ready -> MatchLineupScreen(viewer.row.encounter ?: match, canManage = false,
-                    guardian = GuardianLineupView(viewer.row.playerId, viewer.playerName), showHeader = false, onBack = onBack)
-                failed -> Text(GUARDIAN_LINEUP_DENIED, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
-                else -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(16.dp))
-            }
+        is MatchViewer.Guardian -> when (guardianAccess) {
+            GuardianAccess.READY -> MatchLineupScreen(viewer.row.encounter ?: match, canManage = false,
+                guardian = GuardianLineupView(viewer.row.playerId, viewer.playerName), showHeader = false, onBack = onBack)
+            GuardianAccess.FAILED -> Text(GUARDIAN_LINEUP_DENIED, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
+            GuardianAccess.LOADING -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(16.dp))
         }
     }
 }
 
 /**
- * Pestaña LIVE: marcador y cronología del partido real. Solo la dueña aprobada registra, corrige y
- * anula. Hasta la parte 3 los eventos viven en el celular de quien los registró.
+ * Pestaña LIVE: marcador y cronología en tiempo real (Firestore). Solo la dueña aprobada registra,
+ * desde el inicio del partido hasta 24 h después. Lo escrito sin conexión aparece como pendiente.
  */
 @Composable
-private fun MatchLiveTab(ctx: MatchEventContext, canEdit: Boolean, onRegister: () -> Unit, onOpenEvent: (String) -> Unit) {
-    val context = LocalContext.current
-    val store = remember(context) { LiveEventRepository(context) }
-    var events by remember(ctx.matchId) { mutableStateOf<List<MatchEventRecord>>(emptyList()) }
-    DisposableEffect(ctx.matchId) {
-        val subscription = store.observe(ctx.matchId) { events = it }
-        onDispose { subscription.remove() }
-    }
+private fun MatchLiveTab(ctx: MatchEventContext, events: List<MatchEventRecord>, error: String?, canRegister: Boolean,
+    onRegister: () -> Unit, onOpenEvent: (String) -> Unit) {
     val labels = LocalEventLabels.current
     val score = MatchEvents.score(events)
+    val now by produceState(System.currentTimeMillis()) { while (true) { value = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) } }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -283,9 +310,12 @@ private fun MatchLiveTab(ctx: MatchEventContext, canEdit: Boolean, onRegister: (
                     color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
         }
-        if (canEdit) {
-            Button(modifier = Modifier.fillMaxWidth(), onClick = onRegister) { Text("Registrar evento") }
-            Text("Por ahora los eventos se guardan solo en este celular.", style = MaterialTheme.typography.bodySmall)
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        if (canRegister) {
+            val open = MatchEvents.canRegister(now, ctx.kickoffMillis)
+            Button(modifier = Modifier.fillMaxWidth(), enabled = open, onClick = onRegister) { Text("Registrar evento") }
+            if (!open) Text(if (now < ctx.kickoffMillis) "Podrás registrar eventos cuando empiece el partido (${dateLabel(ctx.kickoffMillis)})."
+                else "El plazo para registrar eventos terminó (24 h después del inicio).", style = MaterialTheme.typography.bodySmall)
         }
         Text("Cronología", style = MaterialTheme.typography.titleMedium)
         if (events.isEmpty()) Text("Todavía no hay eventos registrados para este partido.")
@@ -295,10 +325,11 @@ private fun MatchLiveTab(ctx: MatchEventContext, canEdit: Boolean, onRegister: (
                     Text("${event.minute?.let { "$it'" } ?: "—"} · ${event.typeName}", fontWeight = FontWeight.Bold,
                         textDecoration = if (event.voided) TextDecoration.LineThrough else null)
                     val details = listOfNotNull(event.team?.let { labels.team(it) }, event.playerId?.let { labels.player(it) }) +
-                        event.extraFields.map { (key, value) -> "${labels.extraLabel(key)}: ${labels.extraValue(value)}" }
+                        event.extraFields.map { (key, value) -> "${labels.extraLabel(key)}: ${labels.extraValue(value, isPlayer = key in event.extraNames)}" }
                     if (details.isNotEmpty()) Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                     if (event.notes.isNotBlank()) Text(event.notes, style = MaterialTheme.typography.bodySmall)
                     if (event.voided) Text("Anulado: no cuenta en el marcador", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    if (event.pending) Text("Pendiente de sincronizar", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }

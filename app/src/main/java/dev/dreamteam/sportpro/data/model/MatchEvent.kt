@@ -3,8 +3,8 @@ package dev.dreamteam.sportpro.data.model
 import java.util.UUID
 
 /**
- * US-13/14: evento de un partido REAL (matchFixtures). Mismos campos que tendrá en Firestore
- * (parte 3): equipo como OWN/OPPONENT, jugador por uid y datos extra por clave del catálogo.
+ * US-13/14: evento de un partido REAL, guardado en matchFixtures/{matchId}/events/{id}. Equipo como
+ * OWN/OPPONENT, jugador por uid (con copia del nombre) y datos extra por clave del catálogo.
  */
 data class MatchEventRecord(
     val id: String = UUID.randomUUID().toString(),
@@ -21,22 +21,39 @@ data class MatchEventRecord(
     /** Datos extra del tipo; los de clase "player" guardan el uid del convocado. */
     val extraFields: Map<String, String> = emptyMap(),
     val authorId: String,
+    /** Hora del celular al registrar (clientCreatedAt). */
     val createdAtMillis: Long = System.currentTimeMillis(),
     val voided: Boolean = false,
     val lastModifiedBy: String? = null,
     val lastModifiedAtMillis: Long? = null,
-    val version: Int = 1
+    val version: Int = 1,
+    /** Copia del nombre del jugador al registrar o corregir (se muestra según el rol). */
+    val playerName: String? = null,
+    /** Copia de los nombres de los datos extra de clase "player" (Sale/Entra). */
+    val extraNames: Map<String, String> = emptyMap(),
+    val voidedBy: String? = null,
+    val voidedAtMillis: Long? = null,
+    /** Escrito en este celular y aún no confirmado por el servidor. */
+    val pending: Boolean = false
 )
 
+/**
+ * US-14: una corrección o anulación. [previous] y [current] son los campos editables (mismas claves
+ * que en Firestore: typeName, minute, team, playerId, playerName, notes, extras, extraNames, voided).
+ */
 data class EventAuditEntry(
     val eventId: String,
     val matchId: String,
+    val version: Int,
     val action: String,
     val actorId: String,
     val changedAtMillis: Long,
-    val previous: String,
-    val current: String
+    val previous: Map<String, Any?>,
+    val current: Map<String, Any?>
 )
+
+/** Revisión tal como se guarda en events/{id}/revisions/{version}. */
+data class EventRevision(val version: Int, val action: String, val previous: Map<String, Any?>, val by: String, val atMillis: Long)
 
 /** Datos del partido real que necesitan registrar, corregir y mostrar eventos. */
 data class MatchEventContext(
@@ -131,13 +148,80 @@ object MatchEvents {
 
     fun isDemoMatch(matchId: String): Boolean = matchId.startsWith(DEMO_PREFIX)
 
-    /** Tipo obligatorio y minuto 0-130; devuelve el mensaje de error o null. */
-    fun validate(typeId: String, minute: String): String? {
+    const val SAME_PLAYER_MESSAGE = "Sale y Entra deben ser jugadores distintos."
+    const val REGISTER_HOURS = 24L
+    const val CORRECT_DAYS = 7L
+    private const val HOUR = 3_600_000L
+
+    /** Tipo obligatorio, minuto 0-130 y, en un cambio, Sale distinto de Entra; mensaje de error o null. */
+    fun validate(typeId: String, minute: String, extras: Map<String, String> = emptyMap()): String? {
         val parsed = minute.toIntOrNull()
         return when {
             typeId.isBlank() -> "Selecciona un tipo de evento."
             minute.isNotBlank() && (parsed == null || parsed !in 0..130) -> "Minuto inválido (0 a 130)."
+            sameSaleEntra(extras) -> SAME_PLAYER_MESSAGE
             else -> null
+        }
+    }
+
+    /** Un cambio no puede tener al mismo jugador en Sale y Entra (también lo exigen las reglas). */
+    fun sameSaleEntra(extras: Map<String, String>): Boolean {
+        val out = extras["sale"].orEmpty()
+        return out.isNotBlank() && out == extras["entra"]
+    }
+
+    /** Se registra desde el inicio del partido hasta 24 h después (las reglas usan la hora del servidor). */
+    fun canRegister(nowMillis: Long, kickoffMillis: Long): Boolean =
+        nowMillis >= kickoffMillis && nowMillis < kickoffMillis + REGISTER_HOURS * HOUR
+
+    /** Se corrige y anula hasta 7 días después del inicio. */
+    fun canCorrect(nowMillis: Long, kickoffMillis: Long): Boolean =
+        nowMillis < kickoffMillis + CORRECT_DAYS * 24 * HOUR
+
+    /** Campos editables tal como se guardan (y como `previous` en el historial). Los vacíos no se incluyen. */
+    fun editableSnapshot(event: MatchEventRecord): Map<String, Any?> = buildMap {
+        put("typeId", event.typeId)
+        put("typeName", event.typeName)
+        event.minute?.let { put("minute", it.toLong()) }
+        event.team?.let { put("team", it) }
+        event.playerId?.let { put("playerId", it) }
+        event.playerName?.let { put("playerName", it) }
+        event.notes.takeIf { it.isNotBlank() }?.let { put("notes", it) }
+        put("extras", event.extraFields)
+        put("extraNames", event.extraNames)
+        put("voided", event.voided)
+    }
+
+    /**
+     * Historial de US-14 (más reciente primero): cada corrección o anulación con su valor anterior
+     * (`previous` de la revisión) y el nuevo (el `previous` de la revisión siguiente o el estado actual).
+     */
+    fun historyEntries(matchId: String, eventId: String, revisions: List<EventRevision>, current: Map<String, Any?>): List<EventAuditEntry> {
+        val byVersion = revisions.associateBy { it.version }
+        return revisions.filter { it.action != "CREATE" }.sortedByDescending { it.version }.map { rev ->
+            EventAuditEntry(eventId, matchId, rev.version, rev.action, rev.by, rev.atMillis, rev.previous,
+                byVersion[rev.version + 1]?.previous ?: current)
+        }
+    }
+
+    /**
+     * Nombres de jugadores que puede ver cada rol (mismo criterio que la alineación, US-11/US-22):
+     * dueña → plantilla actual + copias; jugador → copias del evento; tutor → solo su jugador
+     * (el resto "Compañero"); admin → ninguno ("Jugador"). Devuelve los nombres y la etiqueta por defecto.
+     */
+    fun visibleNames(role: MatchViewerRole, events: List<MatchEventRecord>, rosterNames: Map<String, String>,
+        childId: String = "", childName: String = ""): Pair<Map<String, String>, String> {
+        val snapshots = buildMap {
+            events.forEach { e ->
+                if (e.playerId != null && e.playerName != null) put(e.playerId, e.playerName)
+                e.extraNames.forEach { (key, name) -> e.extraFields[key]?.let { id -> put(id, name) } }
+            }
+        }
+        return when (role) {
+            MatchViewerRole.OWNER -> (snapshots + rosterNames) to "Jugador"
+            MatchViewerRole.PLAYER -> snapshots to "Jugador"
+            MatchViewerRole.GUARDIAN -> mapOf(childId to (snapshots[childId] ?: childName)).filterKeys { it.isNotBlank() } to "Compañero"
+            MatchViewerRole.ADMIN -> emptyMap<String, String>() to "Jugador"
         }
     }
 }
