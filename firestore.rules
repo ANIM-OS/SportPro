@@ -863,6 +863,83 @@ service cloud.firestore {
 
 
     // =========================
+    // US-12: CATÁLOGO DE EVENTOS
+    // =========================
+    // eventCatalog/{typeId}: catálogo global, solo el admin. teams/{teamId}/eventTypes/{typeId}: tipos
+    // propios (kind CUSTOM, ID con prefijo eq_) y globales desactivados en el equipo (kind OVERRIDE).
+    // Nadie borra tipos globales: se desactivan. Las reglas no pueden recorrer la lista extraFields;
+    // se exige su tamaño y que coincida con extraKeys, y cada clave se valida por posición.
+    function eventBaseIds() {
+      return ['gol', 'falta', 'penal', 'tarjeta', 'fuera_de_juego', 'cambio',
+        'saque_lateral', 'saque_de_meta', 'tiro_de_esquina'];
+    }
+    function validExtraKey(keys, i) {
+      return keys.size() <= i || (keys[i] is string && keys[i].matches('^[a-z0-9_]{2,30}$'));
+    }
+    function validEventTypeFields(d) {
+      return d.name is string && d.name.size() > 0 && d.name.size() <= 40
+        && d.description is string && d.description.size() <= 200
+        && d.requiredCore is list && d.requiredCore.hasOnly(['minute', 'team', 'playerId', 'notes'])
+        && d.extraKeys is list && d.extraKeys.size() <= 6
+        && d.extraKeys.toSet().size() == d.extraKeys.size()
+        && validExtraKey(d.extraKeys, 0) && validExtraKey(d.extraKeys, 1) && validExtraKey(d.extraKeys, 2)
+        && validExtraKey(d.extraKeys, 3) && validExtraKey(d.extraKeys, 4) && validExtraKey(d.extraKeys, 5)
+        && d.extraFields is list && d.extraFields.size() == d.extraKeys.size()
+        && d.requiredExtra is list && d.extraKeys.hasAll(d.requiredExtra)
+        && d.active is bool && d.order is int
+        && d.updatedBy == request.auth.uid && d.updatedAt == request.time;
+    }
+    match /eventCatalog/{typeId} {
+      allow read: if request.auth != null;
+      function validGlobalEventType() {
+        let d = request.resource.data;
+        return typeId.matches('^[a-z0-9_]{2,40}$') && !typeId.matches('^eq_.*')
+          && d.keys().hasAll(['name', 'description', 'requiredCore', 'extraKeys', 'extraFields', 'requiredExtra',
+            'active', 'base', 'order', 'updatedBy', 'updatedAt'])
+          && d.keys().hasOnly(['name', 'description', 'requiredCore', 'extraKeys', 'extraFields', 'requiredExtra',
+            'active', 'base', 'order', 'updatedBy', 'updatedAt'])
+          && d.base is bool && validEventTypeFields(d);
+      }
+      // Los 9 base solo se crean con base == true; un tipo nuevo no puede usar sus IDs.
+      allow create: if isAdmin() && validGlobalEventType()
+        && request.resource.data.base == (typeId in eventBaseIds());
+      allow update: if isAdmin() && validGlobalEventType()
+        && request.resource.data.base == resource.data.base;
+      allow delete: if false;
+    }
+    match /teams/{teamId}/eventTypes/{typeId} {
+      allow read: if request.auth != null && (
+        get(/databases/$(database)/documents/teams/$(teamId)).data.createdBy == request.auth.uid
+        || exists(/databases/$(database)/documents/teamMemberships/$(teamId + '_' + request.auth.uid))
+        || isAdmin());
+      function validTeamCustomType() {
+        let d = request.resource.data;
+        return d.kind == 'CUSTOM' && typeId.matches('^eq_[a-z0-9_]{1,37}$')
+          && d.keys().hasAll(['kind', 'name', 'description', 'requiredCore', 'extraKeys', 'extraFields', 'requiredExtra',
+            'active', 'order', 'updatedBy', 'updatedAt'])
+          && d.keys().hasOnly(['kind', 'name', 'description', 'requiredCore', 'extraKeys', 'extraFields', 'requiredExtra',
+            'active', 'order', 'updatedBy', 'updatedAt'])
+          && validEventTypeFields(d);
+      }
+      function validTeamOverride() {
+        let d = request.resource.data;
+        return d.kind == 'OVERRIDE'
+          && d.keys().hasAll(['kind', 'active', 'updatedBy', 'updatedAt'])
+          && d.keys().hasOnly(['kind', 'active', 'updatedBy', 'updatedAt'])
+          && d.active is bool && d.updatedBy == request.auth.uid && d.updatedAt == request.time
+          && exists(/databases/$(database)/documents/eventCatalog/$(typeId));
+      }
+      allow create, update: if isApprovedCoach()
+        && get(/databases/$(database)/documents/teams/$(teamId)).data.createdBy == request.auth.uid
+        && get(/databases/$(database)/documents/teams/$(teamId)).data.type == 'EQUIPO'
+        && (validTeamCustomType() || validTeamOverride())
+        && (resource == null || resource.data.kind == request.resource.data.kind);
+      // Solo para la cascada al eliminar el equipo (US-03); la app nunca borra tipos sueltos.
+      allow delete: if request.auth != null
+        && get(/databases/$(database)/documents/teams/$(teamId)).data.createdBy == request.auth.uid;
+    }
+
+    // =========================
     // US-22: PRIVACIDAD Y VISIBILIDAD DE DATOS (Fichas de Jugadores)
     // =========================
     // playerProfiles/{id}: datos deportivos. playerPrivate/{id}: físicos, contacto y emergencia.

@@ -78,8 +78,8 @@ import dev.dreamteam.sportpro.ui.community.CommunityViewModel
 import dev.dreamteam.sportpro.ui.community.CreatePostScreen
 import dev.dreamteam.sportpro.ui.training.TrainingNavHost
 import dev.dreamteam.sportpro.ui.community.PostCommentsScreen
-import dev.dreamteam.sportpro.ui.events.EventCatalogEditScreen
-import dev.dreamteam.sportpro.ui.events.EventCatalogScreen
+import dev.dreamteam.sportpro.ui.events.CatalogScope
+import dev.dreamteam.sportpro.ui.events.EventCatalogManagerScreen
 import dev.dreamteam.sportpro.ui.events.EventDetailScreen
 import dev.dreamteam.sportpro.ui.events.EventEditScreen
 import dev.dreamteam.sportpro.ui.events.EventHistoryScreen
@@ -143,19 +143,14 @@ sealed class SportProRoute(
         title = "Entrenar"
     )
 
-    // ── US-12 · Catálogo configurable de eventos del partido ──
+    // ── US-12 · Catálogo de eventos del equipo (el global del admin está en Entrenamientos) ──
     data object EventCatalog : SportProRoute(
-        route = "event_catalog",
+        route = "event_catalog/{teamId}?name={name}",
         title = "Catálogo de eventos"
-    )
-
-    data object EventCatalogEdit : SportProRoute(
-        route = "event_catalog_edit?typeId={typeId}", // typeId vacío = crear tipo nuevo
-        title = "Tipo de evento"
     ) {
-        const val ARG_TYPE_ID = "typeId"
-        fun create(typeId: String? = null) =
-            if (typeId == null) "event_catalog_edit" else "event_catalog_edit?typeId=$typeId"
+        const val ARG_TEAM_ID = "teamId"
+        const val ARG_NAME = "name"
+        fun create(teamId: String, name: String) = "event_catalog/${android.net.Uri.encode(teamId)}?name=${android.net.Uri.encode(name)}"
     }
 
     // Rutas independientes para US-13 y US-14; no reemplazan Partidos de master.
@@ -418,9 +413,7 @@ fun SportProNavGraph(
                     userEmail = userEmail,
                     onLogout = onLogout,
                     isLoading = isLoading,
-                    canManageCatalog = RoleAccess.can(roles, RoleCapability.MANAGE_EVENT_CATALOG, isCoachApproved),
                     canRegisterEvents = RoleAccess.can(roles, RoleCapability.REGISTER_EVENTS, isCoachApproved),
-                    onOpenCatalog = { navController.navigate(SportProRoute.EventCatalog.route) },
                     onOpenMatches = { navController.navigate(SportProRoute.MatchesUs13.route) }
                 )
             }
@@ -514,6 +507,7 @@ fun SportProNavGraph(
                     canRespondAsGuardian = AppRole.PARENT in roles,
                     newlyCreatedTeamId = createdTeamId,
                     onNewTeamOpened = { backStackEntry?.savedStateHandle?.remove<String>("createdTeamId") },
+                    onOpenEventCatalog = { team -> navController.navigate(SportProRoute.EventCatalog.create(team.id, team.name)) },
                     onCreateTeamClick = {
                         navController.navigate(SportProRoute.CreateTeam.route)
                     }
@@ -546,32 +540,20 @@ fun SportProNavGraph(
                 }
             }
 
-            // ───────── US-12 · Catálogo de eventos ─────────
-            composable(SportProRoute.EventCatalog.route) {
-                RoleGate(roles, RoleCapability.MANAGE_EVENT_CATALOG, isCoachApproved) {
-                    EventCatalogScreen(
-                        onBack = { navController.popBackStack() },
-                        onNewType = { navController.navigate(SportProRoute.EventCatalogEdit.create()) },
-                        onEditType = { typeId ->
-                            navController.navigate(SportProRoute.EventCatalogEdit.create(typeId))
-                        }
-                    )
-                }
-            }
-
+            // ───────── US-12 · Catálogo de eventos del equipo (entrenadora dueña aprobada) ─────────
             composable(
-                route = SportProRoute.EventCatalogEdit.route,
+                route = SportProRoute.EventCatalog.route,
                 arguments = listOf(
-                    navArgument(SportProRoute.EventCatalogEdit.ARG_TYPE_ID) {
-                        type = NavType.StringType
-                        nullable = true
-                        defaultValue = null
-                    }
+                    navArgument(SportProRoute.EventCatalog.ARG_TEAM_ID) { type = NavType.StringType },
+                    navArgument(SportProRoute.EventCatalog.ARG_NAME) { type = NavType.StringType; defaultValue = "" }
                 )
             ) { entry ->
                 RoleGate(roles, RoleCapability.MANAGE_EVENT_CATALOG, isCoachApproved) {
-                    EventCatalogEditScreen(
-                        typeId = entry.arguments?.getString(SportProRoute.EventCatalogEdit.ARG_TYPE_ID),
+                    EventCatalogManagerScreen(
+                        scope = CatalogScope.Team(
+                            entry.arguments?.getString(SportProRoute.EventCatalog.ARG_TEAM_ID).orEmpty(),
+                            entry.arguments?.getString(SportProRoute.EventCatalog.ARG_NAME).orEmpty()
+                        ),
                         onBack = { navController.popBackStack() }
                     )
                 }
@@ -696,9 +678,7 @@ private fun HomeScreenContent(
     userEmail: String,
     onLogout: () -> Unit,
     isLoading: Boolean,
-    canManageCatalog: Boolean,
     canRegisterEvents: Boolean,
-    onOpenCatalog: () -> Unit,
     onOpenMatches: () -> Unit
 ) {
     Column(
@@ -754,15 +734,6 @@ private fun HomeScreenContent(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                if (canManageCatalog) {
-                    Button(
-                        onClick = onOpenCatalog,
-                        modifier = Modifier.fillMaxWidth().height(50.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) { Text("CATÁLOGO DE EVENTOS", color = Color.White, fontWeight = FontWeight.Bold) }
-                    Spacer(modifier = Modifier.height(10.dp))
-                }
                 if (canRegisterEvents) {
                     Button(
                         onClick = onOpenMatches,

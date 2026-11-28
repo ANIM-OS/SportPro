@@ -55,6 +55,7 @@ private object TrainingRoutes {
     const val PLAYER_FEES = "training_player_fees/{playerId}"
     const val ADMIN_FEES = "training_admin_fees"
     const val ADMIN_SESSIONS = "training_admin_sessions"
+    const val ADMIN_EVENT_CATALOG = "training_admin_event_catalog"
     const val GUARDIAN_SESSIONS = "training_guardian_sessions/{playerId}"
 
     fun sessionForm(sessionId: String? = null) =
@@ -192,6 +193,13 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
         }
         composable(TrainingRoutes.ADMIN_FEES) {
             AdminFeesScreen(onBack = { navController.popBackStack() })
+        }
+        // US-12: catálogo global de eventos (solo admin; las reglas lo exigen con isAdmin()).
+        composable(TrainingRoutes.ADMIN_EVENT_CATALOG) {
+            dev.dreamteam.sportpro.ui.events.EventCatalogManagerScreen(
+                scope = dev.dreamteam.sportpro.ui.events.CatalogScope.Global,
+                onBack = { navController.popBackStack() }
+            )
         }
         composable(TrainingRoutes.ADMIN_SESSIONS) {
             AdminSessionsScreen(
@@ -357,6 +365,13 @@ private fun TrainingHub(
                 story = "US-06",
                 icon = Icons.Default.Event,
                 onClick = { onNavigate(TrainingRoutes.ADMIN_SESSIONS) }
+            )
+            ModuleCard(
+                title = "Catálogo global",
+                description = "Tipos de evento de partido disponibles para todos los equipos.",
+                story = "US-12",
+                icon = Icons.Default.Checklist,
+                onClick = { onNavigate(TrainingRoutes.ADMIN_EVENT_CATALOG) }
             )
         }
     }
