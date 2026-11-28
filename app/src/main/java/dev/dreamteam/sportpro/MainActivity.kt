@@ -107,6 +107,8 @@ class MainActivity : ComponentActivity() {
                         isSigningOut = true
                         scope.launch {
                             try {
+                                // US-17: baja de los temas FCM de los equipos antes de salir.
+                                dev.dreamteam.sportpro.notifications.TeamTopics.unsubscribeAll(context)
                                 FirebaseAuth.getInstance().signOut()
                                 credentialManager.clearCredentialState(ClearCredentialStateRequest())
                             } catch (e: ClearCredentialException) {
