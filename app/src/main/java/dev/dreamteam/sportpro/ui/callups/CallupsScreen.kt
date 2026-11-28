@@ -18,6 +18,9 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import dev.dreamteam.sportpro.data.model.Team
 import dev.dreamteam.sportpro.data.model.TeamMember
 import dev.dreamteam.sportpro.data.repository.TeamDirectoryRepository
+import dev.dreamteam.sportpro.ui.lineups.GuardianLineupView
+import dev.dreamteam.sportpro.ui.lineups.MatchLineupScreen
+import dev.dreamteam.sportpro.ui.lineups.showLineupButton
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
@@ -39,8 +42,11 @@ internal fun dateLabel(millis: Long) = DateFormat.getDateTimeInstance(DateFormat
 @Composable
 fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boolean = false, onBack: () -> Unit) {
     var lineupMatch by remember { mutableStateOf<CallupMatch?>(null) }
+    // US-11: al abrir desde la tarjeta del tutor se entra en modo tutor (sin nombres de otros menores).
+    var lineupGuardian by remember { mutableStateOf<GuardianLineupView?>(null) }
     lineupMatch?.let {
-        dev.dreamteam.sportpro.ui.lineups.MatchLineupScreen(it, canManage && it.ownerId == com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid) { lineupMatch = null }
+        MatchLineupScreen(it, canManage && lineupGuardian == null && it.ownerId == com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid,
+            lineupGuardian) { lineupMatch = null; lineupGuardian = null }
         return
     }
     val directory = remember { TeamDirectoryRepository() }
@@ -231,7 +237,7 @@ fun CallupsScreen(canManage: Boolean, isGuardian: Boolean = false, isPlayer: Boo
         if (isPlayer) MyCallups(repository) { lineupMatch = it }
         if (isGuardian) {
             if (isPlayer || canManage) HorizontalDivider()
-            GuardianCallups(repository)
+            GuardianCallups(repository) { encounter, view -> lineupGuardian = view; lineupMatch = encounter }
         }
     }
 }
@@ -361,7 +367,8 @@ private fun PlayerMatchCard(row: PlayerCallup, repository: CallupRepository, onO
             }
             if (!loadingMatch && match == null && row.encounter != null) Text(error ?: "Se muestran los últimos datos guardados; no se pudo confirmar el partido.")
             AvailabilityActions(row, match)
-            match?.let { current -> OutlinedButton(onClick = { onOpenLineup(current) }) { Text("Ver alineación del partido") } }
+            // US-11 (P4c): sin botón con convocatoria retirada o partido cancelado.
+            match?.takeIf { showLineupButton(state) }?.let { current -> OutlinedButton(onClick = { onOpenLineup(current) }) { Text("Ver alineación del partido") } }
         }
     }
 }

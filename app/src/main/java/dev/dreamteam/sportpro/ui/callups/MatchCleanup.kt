@@ -2,13 +2,14 @@ package dev.dreamteam.sportpro.ui.callups
 
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.CollectionReference
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Source
 
 /**
- * Borrado en cascada de un partido: alineación (jugadores, posiciones y documento),
+ * Borrado en cascada de un partido: alineación (jugadores, posiciones, accesos de tutores y documento),
  * respuestas de disponibilidad, convocatorias y, al final, el partido.
  * Lo usan "Cancelar partido" (US-09) y la eliminación de equipos (US-03).
  */
@@ -63,10 +64,12 @@ class MatchCleanup(
                     batch.commit().addOnSuccessListener { deleteLineup() }.addOnFailureListener(failed)
                 } else {
                     deleteLineupSlots(lineup, {
-                        lineup.get(Source.SERVER).addOnSuccessListener { parent ->
-                            if (parent.exists()) lineup.delete().addOnSuccessListener { deleteSelections() }.addOnFailureListener(failed)
-                            else deleteSelections()
-                        }.addOnFailureListener(failed)
+                        deleteLineupDocs(lineup.collection("guardians"), {
+                            lineup.get(Source.SERVER).addOnSuccessListener { parent ->
+                                if (parent.exists()) lineup.delete().addOnSuccessListener { deleteSelections() }.addOnFailureListener(failed)
+                                else deleteSelections()
+                            }.addOnFailureListener(failed)
+                        }, failed)
                     }, failed)
                 }
             }.addOnFailureListener(failed)
@@ -74,13 +77,17 @@ class MatchCleanup(
         deleteLineup()
     }
 
-    private fun deleteLineupSlots(lineup: DocumentReference, done: () -> Unit, failed: (Exception) -> Unit) {
-        lineup.collection("slots").limit(10).get(Source.SERVER).addOnSuccessListener { snapshot ->
+    private fun deleteLineupSlots(lineup: DocumentReference, done: () -> Unit, failed: (Exception) -> Unit) =
+        deleteLineupDocs(lineup.collection("slots"), done, failed)
+
+    /** Borra de 10 en 10 una subcolección de la alineación (casillas sueltas o accesos de tutores, US-11). */
+    private fun deleteLineupDocs(docs: CollectionReference, done: () -> Unit, failed: (Exception) -> Unit) {
+        docs.limit(10).get(Source.SERVER).addOnSuccessListener { snapshot ->
             if (snapshot.isEmpty) done()
             else {
                 val batch = firestore.batch()
                 snapshot.documents.forEach { batch.delete(it.reference) }
-                batch.commit().addOnSuccessListener { deleteLineupSlots(lineup, done, failed) }.addOnFailureListener(failed)
+                batch.commit().addOnSuccessListener { deleteLineupDocs(docs, done, failed) }.addOnFailureListener(failed)
             }
         }.addOnFailureListener(failed)
     }

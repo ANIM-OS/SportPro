@@ -10,7 +10,11 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import dev.dreamteam.sportpro.data.model.GuardianLink
 import dev.dreamteam.sportpro.data.model.GuardianInvite
 import dev.dreamteam.sportpro.data.model.TeamMember
+import dev.dreamteam.sportpro.data.repository.MatchLineupRepository
 import dev.dreamteam.sportpro.data.repository.PlayerProfileRepository
+import dev.dreamteam.sportpro.ui.lineups.GUARDIAN_LINEUP_DENIED
+import dev.dreamteam.sportpro.ui.lineups.GuardianLineupView
+import dev.dreamteam.sportpro.ui.lineups.showLineupButton
 import kotlinx.coroutines.delay
 
 private fun statusLabel(status: String?) = when (status) {
@@ -103,7 +107,7 @@ private fun shortDateLabel(millis: Long): String =
     java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.forLanguageTag("es-PE")).format(java.util.Date(millis))
 
 @Composable
-internal fun GuardianCallups(repository: CallupRepository) {
+internal fun GuardianCallups(repository: CallupRepository, onOpenLineup: (CallupMatch, GuardianLineupView) -> Unit = { _, _ -> }) {
     val profiles = remember { PlayerProfileRepository() }
     var links by remember { mutableStateOf<List<GuardianLink>>(emptyList()) }
     var pendingInvites by remember { mutableStateOf<List<GuardianInvite>>(emptyList()) }
@@ -166,11 +170,11 @@ internal fun GuardianCallups(repository: CallupRepository) {
             { claiming = false; claimError = true; claimMessage = it })
     }) { Text(if (claiming) "Aceptando…" else "Solicitar vínculo") }
     claimMessage?.let { Text(it, color = if (claimError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
-    links.forEach { link -> key(link.id) { GuardianPlayerCallups(link, repository) } }
+    links.forEach { link -> key(link.id) { GuardianPlayerCallups(link, repository, onOpenLineup) } }
 }
 
 @Composable
-private fun GuardianPlayerCallups(link: GuardianLink, repository: CallupRepository) {
+private fun GuardianPlayerCallups(link: GuardianLink, repository: CallupRepository, onOpenLineup: (CallupMatch, GuardianLineupView) -> Unit) {
     var rows by remember { mutableStateOf<List<PlayerCallup>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -182,11 +186,14 @@ private fun GuardianPlayerCallups(link: GuardianLink, repository: CallupReposito
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
     if (!loading && rows.isEmpty() && error == null) Text("Sin convocatorias")
-    rows.forEach { row -> key(row.id) { GuardianCallupCard(row, repository) } }
+    rows.forEach { row -> key(row.id) { GuardianCallupCard(row, link.playerName, repository, onOpenLineup) } }
 }
 
 @Composable
-private fun GuardianCallupCard(row: PlayerCallup, repository: CallupRepository) {
+private fun GuardianCallupCard(row: PlayerCallup, playerName: String, repository: CallupRepository, onOpenLineup: (CallupMatch, GuardianLineupView) -> Unit) {
+    val lineups = remember { MatchLineupRepository() }
+    var opening by remember(row.id) { mutableStateOf(false) }
+    var openError by remember(row.id) { mutableStateOf<String?>(null) }
     // El tutor no puede leer el partido; solo se escucha para saber si ya no existe (cancelado).
     var cancelled by remember(row.matchId) { mutableStateOf(false) }
     DisposableEffect(row.matchId) {
@@ -203,7 +210,22 @@ private fun GuardianCallupCard(row: PlayerCallup, repository: CallupRepository) 
             row.encounter?.let { Text(encounterLabel(it)) }
                 ?: Text("El entrenador debe actualizar los datos de esta convocatoria anterior.")
             if (state == CallupCardState.CANCELADO) Text("La entrenadora canceló este partido.")
-            else AvailabilityActions(row, row.encounter)
+            else {
+                AvailabilityActions(row, row.encounter)
+                // US-11 (P4b): solo con convocatoria vigente y partido no cancelado. Primero se guarda el
+                // acceso del tutor (guardians/{uid}); sin él las reglas no saben de qué jugador es tutor.
+                val encounter = row.encounter
+                if (encounter != null && showLineupButton(state)) {
+                    OutlinedButton(enabled = !opening, onClick = {
+                        opening = true; openError = null
+                        lineups.openAsGuardian(row.matchId, row.playerId)
+                            .addOnSuccessListener { onOpenLineup(encounter, GuardianLineupView(row.playerId, playerName)) }
+                            .addOnFailureListener { openError = GUARDIAN_LINEUP_DENIED }
+                            .addOnCompleteListener { opening = false }
+                    }) { Text(if (opening) "Abriendo…" else "Ver alineación del partido") }
+                    openError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            }
         }
     }
 }
