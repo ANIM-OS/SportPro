@@ -136,7 +136,8 @@ fun TrainingNavHost(roles: Set<AppRole>, isCoachApproved: Boolean) {
                 sessionId = entry.arguments?.getString("sessionId").orEmpty(),
                 onBack = { navController.popBackStack() },
                 onEdit = { id -> navController.navigate(TrainingRoutes.sessionForm(id)) },
-                onOpenPlayerHistory = { playerId -> navController.navigate(TrainingRoutes.attendance(playerId)) }
+                onOpenPlayerHistory = { playerId -> navController.navigate(TrainingRoutes.attendance(playerId)) },
+                isAdmin = isAdmin
             )
         }
         composable(TrainingRoutes.ATTENDANCE) { entry ->

@@ -27,9 +27,11 @@ fun SessionDetailScreen(
     onBack: () -> Unit,
     onEdit: (String) -> Unit,
     onOpenPlayerHistory: (String) -> Unit,
+    // Admin: ve la asistencia de la sesión en solo lectura (US-08).
+    isAdmin: Boolean = false,
     viewModel: SessionDetailViewModel = viewModel()
 ) {
-    LaunchedEffect(sessionId) { viewModel.start(sessionId) }
+    LaunchedEffect(sessionId) { viewModel.start(sessionId, isAdmin) }
     val uiState by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     var confirmDelete by rememberSaveable { mutableStateOf(false) }
@@ -101,6 +103,15 @@ fun SessionDetailScreen(
 
                     if (uiState.isOwner) {
                         item { AttendanceHeader(uiState.roster, uiState.attendance) }
+                        if (!uiState.canMark) {
+                            item {
+                                Text(
+                                    text = "La asistencia se registra cuando empieza la sesión.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
                         when {
                             uiState.rosterLoading -> item { LoadingBox() }
                             uiState.roster.isEmpty() -> item {
@@ -111,9 +122,33 @@ fun SessionDetailScreen(
                                     member = member,
                                     record = uiState.attendance[member.userId],
                                     saving = member.userId in uiState.savingPlayerIds,
+                                    enabled = uiState.canMark,
                                     onMark = { status -> viewModel.mark(member, status) },
                                     onOpenHistory = { onOpenPlayerHistory(member.userId) }
                                 )
+                            }
+                        }
+                        // Jugadores con marca en esta sesión que ya salieron del equipo: solo lectura.
+                        items(uiState.formerMemberRecords, key = { "former_${it.id}" }) { record ->
+                            ReadOnlyAttendanceRow(record, note = "Ya no está en el equipo")
+                        }
+                    } else if (uiState.isAdminView) {
+                        item {
+                            Column(modifier = Modifier.padding(top = 8.dp)) {
+                                SectionLabel("ASISTENCIA")
+                                Text(
+                                    text = "Solo lectura · ${uiState.adminRecords.size} registrados · " +
+                                        "${uiState.adminRecords.count { it.status.countsAsAttended }} asistieron",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                        if (uiState.adminRecords.isEmpty()) {
+                            item { EmptyState("Aún no se registró asistencia en esta sesión.") }
+                        } else {
+                            items(uiState.adminRecords, key = { "admin_${it.id}" }) { record ->
+                                ReadOnlyAttendanceRow(record, note = if (record.wasCorrected) "Corregido" else null)
                             }
                         }
                     } else {
@@ -203,6 +238,7 @@ private fun AttendanceRow(
     member: TeamMember,
     record: AttendanceRecord?,
     saving: Boolean,
+    enabled: Boolean,
     onMark: (AttendanceStatus) -> Unit,
     onOpenHistory: () -> Unit
 ) {
@@ -229,7 +265,8 @@ private fun AttendanceRow(
                 FilterChip(
                     selected = record?.status == status,
                     onClick = { if (record?.status != status) onMark(status) },
-                    enabled = !saving,
+                    // Deshabilitados hasta que empieza la sesión (US-08).
+                    enabled = enabled && !saving,
                     label = { Text(status.label, fontSize = 12.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = color.copy(alpha = 0.18f),
@@ -237,6 +274,22 @@ private fun AttendanceRow(
                     )
                 )
             }
+        }
+    }
+}
+
+/** Marca de asistencia sin chips: jugador que salió del equipo o vista del admin. */
+@Composable
+private fun ReadOnlyAttendanceRow(record: AttendanceRecord, note: String?) {
+    InfoCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(record.playerName, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                if (note != null) {
+                    Text(note, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                }
+            }
+            StatusPill(record.status.label, attendanceColor(record.status))
         }
     }
 }

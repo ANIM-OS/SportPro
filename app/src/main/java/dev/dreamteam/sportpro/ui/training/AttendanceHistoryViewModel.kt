@@ -1,5 +1,6 @@
 package dev.dreamteam.sportpro.ui.training
 
+import dev.dreamteam.sportpro.data.model.AttendanceChange
 import androidx.lifecycle.ViewModel
 import com.google.firebase.firestore.ListenerRegistration
 import dev.dreamteam.sportpro.data.model.AttendanceRecord
@@ -11,6 +12,8 @@ import kotlinx.coroutines.flow.update
 
 data class AttendanceHistoryUiState(
     val records: List<AttendanceRecord> = emptyList(),
+    // Última corrección de cada registro corregido (id del registro → cambio).
+    val changes: Map<String, AttendanceChange> = emptyMap(),
     val isLoading: Boolean = true,
     val error: String? = null
 ) {
@@ -34,9 +37,23 @@ class AttendanceHistoryViewModel : ViewModel() {
         listener = repository.listenPlayer(
             playerId = playerId,
             asCoach = asCoach,
-            onChange = { records -> _uiState.update { it.copy(records = records, isLoading = false, error = null) } },
+            onChange = { records ->
+                _uiState.update { it.copy(records = records, isLoading = false, error = null) }
+                loadChanges(records)
+            },
             onError = { message -> _uiState.update { it.copy(isLoading = false, error = message) } }
         )
+    }
+
+    /** US-08: carga la última corrección de los registros corregidos que aún no se tienen. */
+    private fun loadChanges(records: List<AttendanceRecord>) {
+        records.forEach { record ->
+            val changeId = record.lastChangeId ?: return@forEach
+            if (_uiState.value.changes[record.id]?.id == changeId) return@forEach
+            repository.loadChange(record.id, changeId) { change ->
+                if (change != null) _uiState.update { it.copy(changes = it.changes + (record.id to change)) }
+            }
+        }
     }
 
     override fun onCleared() {

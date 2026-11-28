@@ -31,9 +31,35 @@ data class AttendanceRecord(
     val playerName: String = "",
     val status: AttendanceStatus = AttendanceStatus.PRESENTE,
     val sessionDate: Timestamp? = null,
-    val updatedAt: Timestamp? = null
+    // Hora de la primera marca; los registros anteriores al historial de correcciones no la tienen.
+    val createdAt: Timestamp? = null,
+    val updatedAt: Timestamp? = null,
+    // Última corrección (attendance/{id}/changes/{lastChangeId}); null si nunca se corrigió.
+    val lastChangeId: String? = null
 ) {
+    val wasCorrected: Boolean get() = lastChangeId != null
+
     companion object {
         fun documentId(sessionId: String, playerId: String): String = "${sessionId}_$playerId"
     }
 }
+
+/** US-08: corrección de una asistencia (de un estado a otro), quién la hizo y cuándo. */
+data class AttendanceChange(
+    val id: String = "",
+    val from: AttendanceStatus,
+    val to: AttendanceStatus,
+    val changedBy: String = "",
+    val changedAt: Timestamp? = null
+)
+
+/**
+ * US-08: la asistencia solo se marca cuando la sesión ya empezó (firestore.rules usa la hora del
+ * servidor; aquí se usa la del teléfono, así que puede variar unos segundos).
+ */
+fun canMarkAttendance(sessionDate: java.util.Date?, now: java.util.Date = java.util.Date()): Boolean =
+    sessionDate != null && !sessionDate.after(now)
+
+/** Registros de la sesión cuyo jugador ya no está en el equipo (se muestran en solo lectura). */
+fun recordsOfFormerMembers(records: Collection<AttendanceRecord>, currentMemberIds: Set<String>): List<AttendanceRecord> =
+    records.filter { it.playerId !in currentMemberIds }.sortedBy { it.playerName.lowercase() }

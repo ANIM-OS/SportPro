@@ -334,6 +334,92 @@ service cloud.firestore {
         && resource.data.moderated == false
         && request.resource.data.moderated == true;
       allow delete: if false;
+
+      // US-19: permitir interacciones SOLO con publicaciones visibles y activas.
+      function canInteractWithPost() {
+        let path = /databases/$(database)/documents/communityPosts/$(postId);
+        let post = get(path).data;
+        return request.auth != null && exists(path)
+          && post.active == true && post.moderated == false
+          && (
+            post.visibility == 'TODOS'
+            || post.authorId == request.auth.uid
+            || (post.visibility in ['EQUIPO', 'ACADEMIA']
+              && post.get('teamId', '') is string
+              && exists(/databases/$(database)/documents/teams/$(post.teamId))
+              && (
+                get(/databases/$(database)/documents/teams/$(post.teamId)).data.createdBy == request.auth.uid
+                || exists(/databases/$(database)/documents/teamMemberships/$(post.teamId + '_' + request.auth.uid))
+              ))
+          );
+      }
+
+      function canModerateCommunity() {
+        return request.auth != null && (
+          isAdmin()
+          || exists(/databases/$(database)/documents/moderators/$(request.auth.uid))
+        );
+      }
+
+      match /comments/{commentId} {
+        // Las consultas deben filtrar moderated == false.
+        allow get: if canInteractWithPost()
+          && (resource.data.moderated == false || canModerateCommunity());
+        allow list: if canInteractWithPost() && resource.data.moderated == false;
+
+        allow create: if canInteractWithPost()
+          && request.resource.data.keys().hasAll([
+            'authorId', 'authorName', 'text', 'createdAt', 'moderated'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'authorId', 'authorName', 'text', 'createdAt', 'moderated'
+          ])
+          && request.resource.data.authorId == request.auth.uid
+          && request.resource.data.authorName is string
+          && request.resource.data.authorName.size() > 0
+          && request.resource.data.authorName.size() <= 150
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 300
+          && request.resource.data.moderated == false
+          && request.resource.data.createdAt == request.time;
+
+        allow update: if canModerateCommunity()
+          && resource.data.moderated == false
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderated'])
+          && request.resource.data.moderated == true;
+        allow delete: if false;
+
+        match /reports/{reporterId} {
+          // Los reportes NO se muestran públicamente.
+          allow read: if canModerateCommunity();
+          allow create: if canInteractWithPost()
+            && reporterId == request.auth.uid
+            && exists(/databases/$(database)/documents/communityPosts/$(postId)/comments/$(commentId))
+            && get(/databases/$(database)/documents/communityPosts/$(postId)/comments/$(commentId)).data.moderated == false
+            && get(/databases/$(database)/documents/communityPosts/$(postId)/comments/$(commentId)).data.authorId != request.auth.uid
+            && request.resource.data.keys().hasAll(['reporterId', 'reason', 'createdAt'])
+            && request.resource.data.keys().hasOnly(['reporterId', 'reason', 'createdAt'])
+            && request.resource.data.reporterId == request.auth.uid
+            && request.resource.data.reason is string
+            && request.resource.data.reason.size() > 0
+            && request.resource.data.reason.size() <= 500
+            && request.resource.data.createdAt == request.time;
+          allow update, delete: if false;
+        }
+      }
+
+      match /likes/{userId} {
+        allow read: if canInteractWithPost();
+        allow create: if canInteractWithPost()
+          && userId == request.auth.uid
+          && request.resource.data.keys().hasAll(['userId', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['userId', 'createdAt'])
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if canInteractWithPost() && userId == request.auth.uid;
+      }
     }
 
     match /moderators/{moderatorId} {
@@ -1092,24 +1178,82 @@ service cloud.firestore {
 
     // US-08: asistencia; id "{sessionId}_{playerId}" para evitar duplicados.
     match /attendance/{recordId} {
-      allow read: if request.auth != null && (
-        resource.data.coachId == request.auth.uid
-        || resource.data.playerId == request.auth.uid
-        || isVerifiedGuardianOf(resource.data.playerId)
-      );
-      allow create, update: if isApprovedCoach()
+      function attendanceStatuses() {
+        return ['PRESENTE', 'TARDANZA', 'AUSENTE', 'JUSTIFICADO'];
+      }
+
+      // La entrenadora (o el tutor o el admin) que puede leer el registro con estos datos.
+      function canReadAttendance(r) {
+        return r.coachId == request.auth.uid
+          || r.playerId == request.auth.uid
+          || isVerifiedGuardianOf(r.playerId)
+          || isAdmin();
+      }
+
+      // Datos coherentes con la sesión, el equipo y la membresía (US-08).
+      function validAttendance() {
+        let d = request.resource.data;
+        let session = get(/databases/$(database)/documents/trainingSessions/$(d.sessionId)).data;
+        let membershipPath = /databases/$(database)/documents/teamMemberships/$(d.teamId + '_' + d.playerId);
+        let membership = get(membershipPath).data;
+        return d.coachId == request.auth.uid
+          && recordId == d.sessionId + '_' + d.playerId
+          && session.createdBy == request.auth.uid
+          && session.teamId == d.teamId
+          // Solo cuando la sesión ya empezó (las sesiones solo se borran antes de empezar).
+          && session.date <= request.time
+          && d.sessionDate == session.date
+          && d.teamName == get(/databases/$(database)/documents/teams/$(d.teamId)).data.name
+          && exists(membershipPath)
+          && (session.category == 'TODAS' || membership.get('category', '') == session.category)
+          // Si la membresía guarda el nombre, debe coincidir; si no, la app usa un nombre provisional.
+          && d.playerName is string && d.playerName.size() > 0 && d.playerName.size() <= 80
+          && d.playerName == membership.get('playerName', d.playerName)
+          && d.status in attendanceStatuses()
+          && d.updatedAt == request.time;
+      }
+
+      allow read: if request.auth != null && canReadAttendance(resource.data);
+
+      // Primera marca: createdAt fija la hora del primer registro.
+      allow create: if isApprovedCoach()
         && request.resource.data.keys().hasOnly([
-          'sessionId', 'teamId', 'teamName', 'coachId', 'playerId', 'playerName', 'status', 'sessionDate', 'updatedAt'
+          'sessionId', 'teamId', 'teamName', 'coachId', 'playerId', 'playerName', 'status',
+          'sessionDate', 'createdAt', 'updatedAt'
         ])
-        && request.resource.data.coachId == request.auth.uid
-        && (resource == null || resource.data.coachId == request.auth.uid)
-        && recordId == request.resource.data.sessionId + '_' + request.resource.data.playerId
-        && get(/databases/$(database)/documents/trainingSessions/$(request.resource.data.sessionId)).data.createdBy == request.auth.uid
-        && get(/databases/$(database)/documents/trainingSessions/$(request.resource.data.sessionId)).data.teamId == request.resource.data.teamId
-        && exists(/databases/$(database)/documents/teamMemberships/$(request.resource.data.teamId + '_' + request.resource.data.playerId))
-        && request.resource.data.status in ['PRESENTE', 'TARDANZA', 'AUSENTE', 'JUSTIFICADO']
-        && request.resource.data.updatedAt == request.time;
+        && request.resource.data.createdAt == request.time
+        && validAttendance();
+
+      // Corrección: cambia el estado y deja constancia en changes/{lastChangeId} en el mismo batch.
+      // createdAt no cambia nunca (los registros antiguos sin createdAt siguen sin él).
+      allow update: if isApprovedCoach()
+        && resource.data.coachId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'updatedAt', 'teamName', 'playerName', 'sessionDate', 'lastChangeId'
+        ])
+        && request.resource.data.status != resource.data.status
+        && request.resource.data.lastChangeId is string
+        && request.resource.data.lastChangeId != resource.data.get('lastChangeId', '')
+        && existsAfter(/databases/$(database)/documents/attendance/$(recordId)/changes/$(request.resource.data.lastChangeId))
+        && validAttendance();
       allow delete: if false;
+
+      // Historial de correcciones: solo se crean, junto con la corrección del registro.
+      match /changes/{changeId} {
+        allow read: if request.auth != null
+          && canReadAttendance(get(/databases/$(database)/documents/attendance/$(recordId)).data);
+        allow create: if isApprovedCoach()
+          && request.resource.data.keys().hasOnly(['from', 'to', 'changedBy', 'changedAt'])
+          && request.resource.data.changedBy == request.auth.uid
+          && request.resource.data.changedAt == request.time
+          && get(/databases/$(database)/documents/attendance/$(recordId)).data.coachId == request.auth.uid
+          && get(/databases/$(database)/documents/attendance/$(recordId)).data.get('lastChangeId', '') != changeId
+          && getAfter(/databases/$(database)/documents/attendance/$(recordId)).data.lastChangeId == changeId
+          && request.resource.data.from == get(/databases/$(database)/documents/attendance/$(recordId)).data.status
+          && request.resource.data.to == getAfter(/databases/$(database)/documents/attendance/$(recordId)).data.status
+          && request.resource.data.from != request.resource.data.to;
+        allow update, delete: if false;
+      }
     }
 
     // US-05: mensualidades simuladas; id "{playerId}_{periodo}" para no duplicar periodos.
