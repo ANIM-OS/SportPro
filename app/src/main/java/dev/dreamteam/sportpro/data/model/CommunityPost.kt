@@ -12,5 +12,7 @@ data class CommunityPost(
     val teamId: String? = null,
     val createdAt: Timestamp? = null,
     val active: Boolean = true,
-    val moderated: Boolean = false
+    val moderated: Boolean = false,
+    /** US-18: creada en este celular y aún no confirmada por el servidor. */
+    val pending: Boolean = false
 )

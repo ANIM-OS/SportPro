@@ -269,7 +269,7 @@ fun CreatePostScreen(
 
             Text(
                 text = uiState.publishError ?: "",
-                color = Color(0xFFFF5252),
+                color = MaterialTheme.colorScheme.error,
                 fontSize = 12.sp
             )
 
@@ -295,10 +295,13 @@ fun CreatePostScreen(
 
             Button(
                 onClick = {
+                    // TODOS nunca lleva equipo (las reglas lo rechazan); ACADEMIA de un equipo vinculado lleva viaTeamId.
+                    val target = audienceTeams.firstOrNull { it.id == selectedTeamId }
                     viewModel.createPost(
                         content = content,
                         visibility = selectedVisibility,
-                        teamId = selectedTeamId
+                        teamId = if (selectedVisibility == "TODOS") null else selectedTeamId,
+                        viaTeamId = target?.viaTeamId
                     ) {
                         onBack()
                     }
@@ -317,14 +320,14 @@ fun CreatePostScreen(
                 if (uiState.isPublishing) {
 
                     CircularProgressIndicator(
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onPrimary
                     )
 
                 } else {
 
                     Text(
                         text = "PUBLICAR",
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onPrimary,
                         fontWeight = FontWeight.Bold
                     )
                 }

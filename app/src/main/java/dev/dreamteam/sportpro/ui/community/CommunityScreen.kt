@@ -1,5 +1,7 @@
 package dev.dreamteam.sportpro.ui.community
 
+import com.google.firebase.auth.FirebaseAuth
+import dev.dreamteam.sportpro.data.model.CommunityRules
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -76,7 +78,7 @@ fun CommunityScreen(
                 FloatingActionButton(
                     onClick = onCreatePostClick,
                     containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = Color.White,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     shape = CircleShape
                 ) {
                     Icon(
@@ -138,7 +140,7 @@ fun CommunityScreen(
                     ) {
                         Text(
                             text = uiState.errorMessage ?: "Ocurrió un error",
-                            color = Color(0xFFFF5252)
+                            color = MaterialTheme.colorScheme.error
                         )
                     }
                 }
@@ -229,7 +231,7 @@ private fun CommunityPostCard(
                     Icon(
                         imageVector = Icons.Default.Person,
                         contentDescription = null,
-                        tint = Color.White
+                        tint = MaterialTheme.colorScheme.onPrimary
                     )
                 }
 
@@ -246,8 +248,9 @@ private fun CommunityPostCard(
                         fontSize = 14.sp
                     )
 
+                    // US-18: solo nombre y rol legible del autor.
                     Text(
-                        text = post.authorRole,
+                        text = CommunityRules.roleLabel(post.authorRole),
                         color = MaterialTheme.colorScheme.primary,
                         fontSize = 11.sp
                     )
@@ -258,6 +261,16 @@ private fun CommunityPostCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 11.sp
                 )
+            }
+
+            val viewerId = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+            CommunityRules.hiddenNotice(post, viewerId)?.let {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            if (post.pending) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Pendiente de sincronizar", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
             }
 
             Spacer(modifier = Modifier.height(14.dp))
