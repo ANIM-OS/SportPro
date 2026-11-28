@@ -471,13 +471,56 @@ service cloud.firestore {
             && (ownsCallupTeam(request.resource.data.teamId) || teamMember(request.resource.data.teamId)
               || (request.resource.data.visibility == 'ACADEMIA' && academyMember(request.resource.data.teamId)))));
 
-      // Un moderador designado o un administrador puede ocultar una publicación sin alterar su contenido.
-      allow update: if request.auth != null
-        && (exists(/databases/$(database)/documents/moderators/$(request.auth.uid)) || isAdmin())
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderated'])
-        && resource.data.moderated == false
-        && request.resource.data.moderated == true;
+      // US-21: el moderador o el admin ocultan o restauran (en ambos sentidos) sin alterar el contenido;
+      // queda quién (moderatedBy) y cuándo (moderatedAt, hora del servidor). Lecturas: moderators y admins = 2.
+      allow update: if canModerateCommunity() && moderationChange();
       allow delete: if false;
+
+      // US-21: cambio de moderación válido (publicación o comentario).
+      function moderationChange() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderated', 'moderatedBy', 'moderatedAt'])
+          && request.resource.data.moderated is bool
+          && request.resource.data.moderated != resource.data.moderated
+          && request.resource.data.moderatedBy == request.auth.uid
+          && request.resource.data.moderatedAt == request.time;
+      }
+
+      // US-21: reporte con motivo, un documento por usuario y contenido (ID = uid del que reporta).
+      function validReport(type) {
+        let r = request.resource.data;
+        return r.keys().hasAll(['targetType', 'postId', 'reporterId', 'reporterName', 'reason', 'status', 'createdAt'])
+          && r.keys().hasOnly(['targetType', 'postId', 'commentId', 'reporterId', 'reporterName', 'reason', 'status', 'createdAt'])
+          && r.targetType == type
+          && r.postId == postId
+          && r.reporterId == request.auth.uid
+          && r.reporterName == profileDisplayName()
+          && r.reason is string && r.reason.size() > 0 && r.reason.size() <= 500
+          && r.status == 'PENDING'
+          && r.createdAt == request.time;
+      }
+
+      // US-21: "Marcar como revisado" (PENDING → REVIEWED), solo moderador o admin. Lecturas: 2.
+      function reviewReport() {
+        return canModerateCommunity()
+          && resource.data.status == 'PENDING'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAt'])
+          && request.resource.data.status == 'REVIEWED'
+          && request.resource.data.reviewedBy == request.auth.uid
+          && request.resource.data.reviewedAt == request.time;
+      }
+
+      // US-21: reportar una publicación ajena, activa, no ocultada y visible. Peor caso (ACADEMIA): post,
+      // teams (academia), academyAccess, teams (equipo), membresía, users y coachApprovals = 7.
+      match /reports/{reporterId} {
+        allow read: if canModerateCommunity();
+        allow create: if canInteractWithPost() && canEngageCommunity()
+          && reporterId == request.auth.uid
+          && get(/databases/$(database)/documents/communityPosts/$(postId)).data.authorId != request.auth.uid
+          && validReport('POST')
+          && !request.resource.data.keys().hasAny(['commentId']);
+        allow update: if reviewReport();
+        allow delete: if false;
+      }
 
       // US-19: comentar, reaccionar y reportar SOLO en publicaciones activas, no ocultadas y visibles
       // (misma audiencia que la lectura, sin el tutor: el tutor solo lee).
@@ -520,8 +563,9 @@ service cloud.firestore {
         // US-19: el autor lee su comentario oculto ("Ocultado por moderación"); los demás no.
         allow get: if canReadPostContent()
           && (resource.data.moderated == false || resource.data.authorId == request.auth.uid || canModerateCommunity());
+        // US-21: el moderador y el admin también listan los ocultos (sección "Ocultos").
         allow list: if canReadPostContent()
-          && (resource.data.moderated == false || resource.data.authorId == request.auth.uid);
+          && (resource.data.moderated == false || resource.data.authorId == request.auth.uid || canModerateCommunity());
 
         // Peor caso (ACADEMIA): post, teams (academia), academyAccess, teams (equipo), membresía, users
         // y coachApprovals = 7 documentos (límite 10).
@@ -541,10 +585,8 @@ service cloud.firestore {
           && request.resource.data.moderated == false
           && request.resource.data.createdAt == request.time;
 
-        allow update: if canModerateCommunity()
-          && resource.data.moderated == false
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderated'])
-          && request.resource.data.moderated == true;
+        // US-21: ocultar o restaurar con moderatedBy y moderatedAt (mismo criterio que la publicación).
+        allow update: if canModerateCommunity() && moderationChange();
         allow delete: if false;
 
         match /reports/{reporterId} {
@@ -556,14 +598,10 @@ service cloud.firestore {
             && exists(/databases/$(database)/documents/communityPosts/$(postId)/comments/$(commentId))
             && get(/databases/$(database)/documents/communityPosts/$(postId)/comments/$(commentId)).data.moderated == false
             && get(/databases/$(database)/documents/communityPosts/$(postId)/comments/$(commentId)).data.authorId != request.auth.uid
-            && request.resource.data.keys().hasAll(['reporterId', 'reason', 'createdAt'])
-            && request.resource.data.keys().hasOnly(['reporterId', 'reason', 'createdAt'])
-            && request.resource.data.reporterId == request.auth.uid
-            && request.resource.data.reason is string
-            && request.resource.data.reason.size() > 0
-            && request.resource.data.reason.size() <= 500
-            && request.resource.data.createdAt == request.time;
-          allow update, delete: if false;
+            && validReport('COMMENT')
+            && request.resource.data.commentId == commentId;
+          allow update: if reviewReport();
+          allow delete: if false;
         }
       }
 
@@ -592,6 +630,18 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.get('academyId', '') == request.resource.data.academyId
         && get(/databases/$(database)/documents/teams/$(request.resource.data.academyId)).data.type == 'ACADEMIA'
         && (ownsCallupTeam(request.resource.data.teamId) || teamMember(request.resource.data.teamId));
+    }
+
+    // US-21: la pantalla de Moderación usa collectionGroup para listar los reportes pendientes y los
+    // comentarios ocultos. Solo moderador o admin (admins y moderators = 2 lecturas); nadie más lee
+    // reportes por ningún camino (ni por ID ni por collectionGroup).
+    match /{path=**}/reports/{reportId} {
+      allow read: if request.auth != null
+        && (isAdmin() || exists(/databases/$(database)/documents/moderators/$(request.auth.uid)));
+    }
+    match /{path=**}/comments/{commentId} {
+      allow read: if request.auth != null
+        && (isAdmin() || exists(/databases/$(database)/documents/moderators/$(request.auth.uid)));
     }
 
     match /moderators/{moderatorId} {

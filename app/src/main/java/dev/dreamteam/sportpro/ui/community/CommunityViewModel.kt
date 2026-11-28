@@ -5,6 +5,7 @@ import com.google.firebase.firestore.ListenerRegistration
 import dev.dreamteam.sportpro.data.model.CommunityPost
 import dev.dreamteam.sportpro.data.model.CommunityTeamTarget
 import dev.dreamteam.sportpro.data.repository.CommunityRepository
+import dev.dreamteam.sportpro.data.repository.ModerationRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,12 +22,14 @@ data class CommunityUiState(
     val postTargets: List<CommunityTeamTarget> = emptyList(),
     val postTargetsError: String? = null,
     val moderatingPostId: String? = null,
-    val moderationError: String? = null
+    val moderationError: String? = null,
+    val moderationNotice: String? = null
 )
 
 class CommunityViewModel : ViewModel() {
 
     private val repository = CommunityRepository()
+    private val moderation = ModerationRepository()
 
     private val _uiState =
         MutableStateFlow(CommunityUiState())
@@ -141,16 +144,33 @@ class CommunityViewModel : ViewModel() {
         )
     }
 
-    fun moderatePost(postId: String) {
+    /**
+     * US-21: ocultar ([hide] = true) o restaurar con moderatedBy/moderatedAt. Se aplica al instante (también
+     * sin conexión); el aviso queda en "Pendiente de sincronizar" hasta que el servidor lo confirma.
+     */
+    fun setPostHidden(postId: String, hide: Boolean) {
         if (!_uiState.value.canModerate || _uiState.value.moderatingPostId != null) return
-        _uiState.value = _uiState.value.copy(moderatingPostId = postId, moderationError = null)
-        repository.moderatePost(
-            postId = postId,
-            onSuccess = { _uiState.value = _uiState.value.copy(moderatingPostId = null) },
+        _uiState.value = _uiState.value.copy(moderatingPostId = postId, moderationError = null, moderationNotice = null)
+        moderation.setHidden(postId, null, hide,
+            onSaved = {
+                _uiState.value = _uiState.value.copy(moderatingPostId = null,
+                    moderationNotice = (if (hide) "Publicación ocultada" else "Publicación restaurada") + " · Pendiente de sincronizar")
+            },
+            onSynced = {
+                _uiState.value = _uiState.value.copy(moderationNotice = if (hide) "Publicación ocultada" else "Publicación restaurada")
+            },
             onError = { message ->
-                _uiState.value = _uiState.value.copy(moderatingPostId = null, moderationError = message)
-            }
-        )
+                _uiState.value = _uiState.value.copy(moderatingPostId = null, moderationError = message, moderationNotice = null)
+            })
+    }
+
+    /** US-21: reportar una publicación ajena con motivo (una vez por usuario). */
+    fun reportPost(postId: String, reason: String) {
+        _uiState.value = _uiState.value.copy(moderationError = null, moderationNotice = null)
+        moderation.report(postId, null, reason,
+            onSaved = { _uiState.value = _uiState.value.copy(moderationNotice = "Reporte guardado · Pendiente de sincronizar") },
+            onSynced = { _uiState.value = _uiState.value.copy(moderationNotice = "Reporte enviado") },
+            onError = { message -> _uiState.value = _uiState.value.copy(moderationError = message, moderationNotice = null) })
     }
 
     override fun onCleared() {

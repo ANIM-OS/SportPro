@@ -90,6 +90,7 @@ import dev.dreamteam.sportpro.ui.community.CommunityViewModel
 import dev.dreamteam.sportpro.ui.community.CreatePostScreen
 import dev.dreamteam.sportpro.ui.training.TrainingNavHost
 import dev.dreamteam.sportpro.ui.community.PostCommentsScreen
+import dev.dreamteam.sportpro.ui.community.ModerationScreen
 import dev.dreamteam.sportpro.ui.events.CatalogScope
 import dev.dreamteam.sportpro.ui.events.EventCatalogManagerScreen
 import dev.dreamteam.sportpro.domain.access.COACH_PENDING_MESSAGE
@@ -175,6 +176,12 @@ sealed class SportProRoute(
         const val ARG_POST_ID = "postId"
         fun create(postId: String) = "post_comments/$postId"
     }
+
+    // ── US-21 · Moderación (solo moderador o admin; la pantalla y las reglas lo comprueban) ──
+    data object Moderation : SportProRoute(
+        route = "moderation",
+        title = "Moderación"
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -441,7 +448,9 @@ fun SportProNavGraph(
                                 },
                                 onOpenComments = { postId ->
                                     navController.navigate(SportProRoute.PostComments.create(postId))
-                                }
+                                },
+                                canReport = RoleAccess.can(roles, RoleCapability.COMMENT_POST, isCoachApproved),
+                                onOpenModeration = { navController.navigate(SportProRoute.Moderation.route) }
                             )
                         } else {
                             TryoutsScreen(
@@ -559,6 +568,11 @@ fun SportProNavGraph(
                     canComment = RoleAccess.can(roles, RoleCapability.COMMENT_POST, isCoachApproved),
                     onBack = { navController.popBackStack() }
                 )
+            }
+
+            // ───────── US-21 · Moderación ─────────
+            composable(SportProRoute.Moderation.route) {
+                ModerationScreen(onBack = { navController.popBackStack() })
             }
         }
     }

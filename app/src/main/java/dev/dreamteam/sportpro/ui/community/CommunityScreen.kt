@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.dreamteam.sportpro.data.model.CommunityPost
+import dev.dreamteam.sportpro.data.model.ModerationRules
 import dev.dreamteam.sportpro.data.repository.CommunityRepository
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -57,10 +58,15 @@ fun CommunityScreen(
     onCreatePostClick: () -> Unit,
     canCreatePost: Boolean,
     onOpenComments: (String) -> Unit = {},
+    // US-21: reportar publicaciones (mismo criterio que comentar) y abrir la pantalla de Moderación.
+    canReport: Boolean = false,
+    onOpenModeration: () -> Unit = {},
     viewModel: CommunityViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
+    val viewerId = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+    var reportPostId by remember { mutableStateOf<String?>(null) }
 
     // Tras publicar, la lista conserva la publicación que se estaba viendo y la
     // nueva queda arriba, fuera de pantalla; se sube solo después de publicar.
@@ -115,8 +121,16 @@ fun CommunityScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
+            if (uiState.canModerate) {
+                TextButton(onClick = onOpenModeration) { Text("MODERACIÓN · REPORTES Y OCULTOS") }
+            }
+
             uiState.moderationError?.let { message ->
                 Text(text = message, color = MaterialTheme.colorScheme.error)
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            uiState.moderationNotice?.let { message ->
+                Text(text = message, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
@@ -185,7 +199,9 @@ fun CommunityScreen(
                                 post = post,
                                 canModerate = uiState.canModerate,
                                 isModerating = uiState.moderatingPostId == post.id,
-                                onModerate = { viewModel.moderatePost(post.id) },
+                                onModerate = { viewModel.setPostHidden(post.id, !post.moderated) },
+                                canReport = ModerationRules.canReportPost(post, viewerId, canReport),
+                                onReport = { reportPostId = post.id },
                                 onOpenComments = { onOpenComments(post.id) }
                             )
                         }
@@ -193,6 +209,13 @@ fun CommunityScreen(
                 }
             }
         }
+    }
+
+    reportPostId?.let { id ->
+        ReportReasonDialog("Reportar publicación", onConfirm = { reason ->
+            viewModel.reportPost(id, reason)
+            reportPostId = null
+        }, onDismiss = { reportPostId = null })
     }
 }
 
@@ -202,6 +225,8 @@ private fun CommunityPostCard(
     canModerate: Boolean,
     isModerating: Boolean,
     onModerate: () -> Unit,
+    canReport: Boolean,
+    onReport: () -> Unit,
     onOpenComments: () -> Unit
 ) {
     Card(
@@ -299,9 +324,15 @@ private fun CommunityPostCard(
                 Text("👍 Me gusta · Ver y escribir comentarios")
             }
 
-            if (canModerate) {
+            // US-21: no en las propias, ni en las ocultas, ni en las pendientes de sincronizar.
+            if (canReport) {
+                TextButton(onClick = onReport) { Text("REPORTAR") }
+            }
+
+            // US-21: el moderador ve en el feed sus propias ocultas; el resto se restaura en Moderación.
+            if (canModerate && !post.pending) {
                 TextButton(onClick = onModerate, enabled = !isModerating) {
-                    Text(if (isModerating) "Ocultando…" else "Ocultar publicación")
+                    Text(if (post.moderated) "Restaurar publicación" else "Ocultar publicación")
                 }
             }
         }

@@ -74,7 +74,9 @@ const C = (u, post) => collection(u.db, 'communityPosts', post, 'comments');
 const comment = (u, post, extra = {}) => addDoc(C(u, post), { authorId: u.uid, authorName: u.display, text: 'Buen partido', createdAt: serverTimestamp(), moderated: false, ...extra });
 const like = (u, post, id = u.uid, extra = {}) => setDoc(doc(u.db, 'communityPosts', post, 'likes', id), { userId: u.uid, createdAt: serverTimestamp(), ...extra });
 const unlike = (u, post, id = u.uid) => deleteDoc(doc(u.db, 'communityPosts', post, 'likes', id));
-const report = (u, post, commentId, reason = 'Acoso o insulto') => setDoc(doc(u.db, 'communityPosts', post, 'comments', commentId, 'reports', u.uid), { reporterId: u.uid, reason, createdAt: serverTimestamp() });
+// US-21: el reporte guarda tipo, postId, commentId, nombre del perfil y estado PENDING.
+const report = (u, post, commentId, reason = 'Acoso o insulto') => setDoc(doc(u.db, 'communityPosts', post, 'comments', commentId, 'reports', u.uid),
+  { targetType: 'COMMENT', postId: post, commentId, reporterId: u.uid, reporterName: u.display, reason, status: 'PENDING', createdAt: serverTimestamp() });
 const visibleQ = (u, post) => query(C(u, post), where('moderated', '==', false));
 const ownQ = (u, post) => query(C(u, post), where('authorId', '==', u.uid));
 
@@ -138,7 +140,7 @@ await expectOk('la moderadora lee los reportes', getDoc(doc(moderator.db, 'commu
 
 // ---------- 4. Comentarios ocultos ----------
 console.log('\n--- 4. Comentarios ocultos ---');
-await expectOk('la moderadora oculta el comentario de la jugadora', updateDoc(doc(moderator.db, 'communityPosts', todos, 'comments', p1Comment), { moderated: true }));
+await expectOk('la moderadora oculta el comentario de la jugadora', updateDoc(doc(moderator.db, 'communityPosts', todos, 'comments', p1Comment), { moderated: true, moderatedBy: moderator.uid, moderatedAt: serverTimestamp() }));
 await expectOk('la autora lee su comentario oculto por ID', getDoc(doc(p1.db, 'communityPosts', todos, 'comments', p1Comment)));
 const own = await getDocs(ownQ(p1, todos)).then((s) => s.docs.some((d) => d.id === p1Comment && d.get('moderated') === true), (e) => e.code);
 out('la autora lo ve en su consulta propia (authorId == uid)', own === true, String(own));

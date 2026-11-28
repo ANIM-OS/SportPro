@@ -269,12 +269,7 @@ class CommunityRepository {
             .addOnFailureListener(failure)
     }
 
-    fun moderatePost(postId: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        firestore.collection("communityPosts").document(postId)
-            .update("moderated", true)
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo ocultar la publicación") }
-    }
+    // US-21: ocultar, restaurar y reportar están en ModerationRepository.
 
     /** US-19: comentario de una publicación. */
     data class PostComment(
@@ -372,30 +367,6 @@ class CommunityRepository {
             "createdAt" to FieldValue.serverTimestamp())) else doc.delete()
         task.addOnFailureListener { onError("No se pudo guardar el Me gusta.") }
         onSuccess()
-    }
-
-    /** Reporte con motivo; ID = uid, así un usuario reporta cada comentario una sola vez. */
-    fun reportComment(postId: String, commentId: String, reason: String,
-                      onSuccess: () -> Unit, onError: (String) -> Unit) {
-        val uid = auth.currentUser?.uid ?: run { onError("Inicia sesión para reportar"); return }
-        CommunityRules.validateReason(reason)?.let { onError(it); return }
-        firestore.collection("communityPosts").document(postId).collection("comments")
-            .document(commentId).collection("reports").document(uid)
-            .set(mapOf("reporterId" to uid, "reason" to reason.trim(),
-                "createdAt" to FieldValue.serverTimestamp()))
-            .addOnFailureListener { onError("No se pudo enviar el reporte (puede que ya lo hayas reportado).") }
-        onSuccess()
-    }
-
-    fun moderateComment(postId: String, commentId: String,
-                        onSuccess: () -> Unit, onError: (String) -> Unit) {
-        checkModerator(onResult = { allowed ->
-            if (!allowed) { onError("No tienes permisos para moderar"); return@checkModerator }
-            firestore.collection("communityPosts").document(postId).collection("comments")
-                .document(commentId).update("moderated", true)
-                .addOnSuccessListener { onSuccess() }
-                .addOnFailureListener { onError(it.localizedMessage ?: "No se pudo moderar") }
-        }, onError = onError)
     }
 
 }

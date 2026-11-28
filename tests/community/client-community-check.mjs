@@ -146,12 +146,12 @@ await expectDenied('tutora NO da like', setDoc(doc(guardian.db, 'communityPosts'
 await checkQ('tutora lee comentarios (peor caso: 8 documentos)', query(collection(guardian.db, 'communityPosts', teamPostId, 'comments'), where('moderated', '==', false)), '1 docs');
 await expectOk('miembro con academyAccess comenta en la ACADEMIA', addDoc(collection(p1.db, 'communityPosts', academyPostId, 'comments'), { authorId: p1.uid, authorName: p1.display, text: 'Ok', createdAt: serverTimestamp(), moderated: false }));
 await expectOk('miembro da like en la ACADEMIA', setDoc(doc(p1.db, 'communityPosts', academyPostId, 'likes', p1.uid), { userId: p1.uid, createdAt: serverTimestamp() }));
-await expectDenied('la autora no puede ocultar su publicación', updateDoc(doc(p1.db, 'communityPosts', publicId), { moderated: true }));
+await expectDenied('la autora no puede ocultar su publicación', updateDoc(doc(p1.db, 'communityPosts', publicId), { moderated: true, moderatedBy: p1.uid, moderatedAt: serverTimestamp() }));
 await expectDenied('nadie edita el contenido (autora)', updateDoc(doc(p1.db, 'communityPosts', publicId), { content: 'otro' }));
 await expectDenied('nadie borra (autora)', deleteDoc(doc(p1.db, 'communityPosts', publicId)));
 await expectDenied('nadie borra (admin)', deleteDoc(doc(admin.db, 'communityPosts', publicId)));
-await expectOk('la moderadora oculta la publicación de EQUIPO', updateDoc(doc(moderator.db, 'communityPosts', teamPostId), { moderated: true }));
-await expectOk('la moderadora oculta la pública', updateDoc(doc(moderator.db, 'communityPosts', publicId), { moderated: true }));
+await expectOk('la moderadora oculta la publicación de EQUIPO', updateDoc(doc(moderator.db, 'communityPosts', teamPostId), { moderated: true, moderatedBy: moderator.uid, moderatedAt: serverTimestamp() }));
+await expectOk('la moderadora oculta la pública', updateDoc(doc(moderator.db, 'communityPosts', publicId), { moderated: true, moderatedBy: moderator.uid, moderatedAt: serverTimestamp() }));
 await expectDenied('un tercero (otra jugadora) NO lee por ID la pública oculta', getDoc(doc(p2.db, 'communityPosts', publicId)));
 await expectDenied('un miembro (no autor) NO lee por ID la de EQUIPO oculta', getDoc(doc(both.db, 'communityPosts', teamPostId)));
 await expectOk('la autora lee la suya oculta por ID', getDoc(doc(p1.db, 'communityPosts', publicId)));

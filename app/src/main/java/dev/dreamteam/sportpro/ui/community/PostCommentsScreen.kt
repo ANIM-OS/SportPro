@@ -19,6 +19,7 @@ import com.google.firebase.auth.FirebaseAuth
 import dev.dreamteam.sportpro.data.model.CommunityPost
 import dev.dreamteam.sportpro.data.model.CommunityRules
 import dev.dreamteam.sportpro.data.repository.CommunityRepository
+import dev.dreamteam.sportpro.data.repository.ModerationRepository
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -35,6 +36,7 @@ private fun date19(timestamp: com.google.firebase.Timestamp?): String =
 @Composable
 fun PostCommentsScreen(postId: String, canComment: Boolean, onBack: () -> Unit) {
     val repo = remember { CommunityRepository() }
+    val moderation = remember { ModerationRepository() }
     val viewerId = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
     val signedIn = viewerId.isNotBlank()
     var post by remember(postId) { mutableStateOf<CommunityPost?>(null) }
@@ -160,11 +162,16 @@ fun PostCommentsScreen(postId: String, canComment: Boolean, onBack: () -> Unit) 
                                 }
                                 Text(comment.text, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
                                 if (comment.pending) Text("Pendiente de sincronizar", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
-                                if (canModerate && !comment.moderated) TextButton(onClick = {
-                                    repo.moderateComment(postId, comment.id,
-                                        onSuccess = { notice = "Comentario ocultado" },
+                                // US-21: ocultar o restaurar (el moderador ve sus propios ocultos aquí; el
+                                // resto se restaura desde Moderación → Ocultos).
+                                if (canModerate && !comment.pending) TextButton(onClick = {
+                                    error = null
+                                    val hide = !comment.moderated
+                                    moderation.setHidden(postId, comment.id, hide,
+                                        onSaved = { notice = if (hide) "Comentario ocultado" else "Comentario restaurado" },
+                                        onSynced = { },
                                         onError = { error = it })
-                                }) { Text("Ocultar comentario", fontSize = 11.sp) }
+                                }) { Text(if (comment.moderated) "Restaurar comentario" else "Ocultar comentario", fontSize = 11.sp) }
                             }
                         }
                     }
@@ -196,31 +203,14 @@ fun PostCommentsScreen(postId: String, canComment: Boolean, onBack: () -> Unit) 
     }
 
     reportId?.let { id ->
-        var reason by remember(id) { mutableStateOf(CommunityRules.REPORT_REASONS.first()) }
-        AlertDialog(onDismissRequest = { reportId = null },
-            title = { Text("Reportar comentario") },
-            text = {
-                Column {
-                    Text("Elige el motivo. Solo lo verá el equipo de moderación.")
-                    Spacer(Modifier.height(8.dp))
-                    CommunityRules.REPORT_REASONS.forEach { option ->
-                        Row(Modifier.fillMaxWidth().selectable(selected = reason == option, onClick = { reason = option })
-                            .padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = reason == option, onClick = { reason = option })
-                            Text(option)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    repo.reportComment(postId, id, reason,
-                        onSuccess = { notice = "Reporte enviado" },
-                        onError = { error = it })
-                    reportId = null
-                }) { Text("REPORTAR") }
-            }, dismissButton = {
-                TextButton(onClick = { reportId = null }) { Text("CANCELAR") }
-            })
+        ReportReasonDialog("Reportar comentario", onConfirm = { reason ->
+            error = null
+            // US-21: se guarda al instante (también sin conexión) y se confirma al sincronizar.
+            moderation.report(postId, id, reason,
+                onSaved = { notice = "Reporte guardado · Pendiente de sincronizar" },
+                onSynced = { notice = "Reporte enviado" },
+                onError = { error = it })
+            reportId = null
+        }, onDismiss = { reportId = null })
     }
 }
