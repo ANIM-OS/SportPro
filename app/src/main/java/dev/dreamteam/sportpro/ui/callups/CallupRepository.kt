@@ -111,6 +111,12 @@ class CallupRepository {
             }
             val lineupRef = db.collection("matchLineups").document(match.id)
             val assignments = withdrawals.associateWith { player -> tx.get(lineupRef.collection("players").document(player)) }
+            // US-10: al retirar, y al reconvocar a quien ya tenía convocatoria, la respuesta anterior deja de valer.
+            // Se lee primero (la regla get no depende de que exista) y solo se borra si existe.
+            val reconvocations = additions.filter { current.getValue(it).exists() }
+            val responses = (withdrawals + reconvocations).associateWith { player ->
+                tx.get(db.collection("matchAvailability").document("${match.id}_$player"))
+            }
             check(encounter.getString("teamId") == match.teamId && encounter.getString("category") == match.category) {
                 "El partido cambió. Vuelve a seleccionarlo."
             }
@@ -144,6 +150,7 @@ class CallupRepository {
                     }
                     tx.delete(lineupRef.collection("players").document(player))
                 }
+                responses[player]?.takeIf { it.exists() }?.let { tx.delete(it.reference) }
                 tx.set(selections.document("${match.id}_$player"), mapOf(
                     "matchId" to match.id, "teamId" to match.teamId, "ownerId" to actor,
                     "playerId" to player, "selected" to (player in selected), "encounter" to details,

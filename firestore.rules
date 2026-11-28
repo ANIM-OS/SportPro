@@ -205,9 +205,12 @@ service cloud.firestore {
         availabilityActor(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.playerId)
         || ownsCallupTeam(get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.teamId)
         // US-09: la entrenadora que convocó, para limpiar respuestas huérfanas.
-        || get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.ownerId == request.auth.uid);
-      allow list: if request.auth != null && resource.data.ownerId == request.auth.uid
-        && ownsCallupTeam(resource.data.teamId);
+        || get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data.ownerId == request.auth.uid
+        // US-10: el admin consulta en solo lectura, como en US-05, US-06, US-08 y US-09.
+        || isAdmin());
+      allow list: if request.auth != null && (
+        (resource.data.ownerId == request.auth.uid && ownsCallupTeam(resource.data.teamId))
+        || isAdmin());
       function validResponse() {
         let d = request.resource.data;
         let selection = get(/databases/$(database)/documents/matchCallupPlayers/$(selectionId)).data;
