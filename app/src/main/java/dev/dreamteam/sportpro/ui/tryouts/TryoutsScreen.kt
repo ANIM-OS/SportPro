@@ -1,5 +1,7 @@
 package dev.dreamteam.sportpro.ui.tryouts
 
+import dev.dreamteam.sportpro.domain.tryouts.canCancel
+import dev.dreamteam.sportpro.domain.tryouts.cancelledByModeration
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -85,7 +87,7 @@ fun TryoutsScreen(
             text = { Text("\"${notice.title}\" dejará de mostrarse como vigente. Esta acción no se puede deshacer.") },
             confirmButton = {
                 TextButton(onClick = { viewModel.cancel(notice); confirmCancel = null }) {
-                    Text("Cancelar aviso", color = Color(0xFFFF5252))
+                    Text("Cancelar aviso", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = { TextButton(onClick = { confirmCancel = null }) { Text("Volver") } }
@@ -99,7 +101,7 @@ fun TryoutsScreen(
                 FloatingActionButton(
                     onClick = onCreateClick,
                     containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = Color.White,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     shape = CircleShape
                 ) {
                     Icon(Icons.Default.Add, contentDescription = "Nuevo aviso")
@@ -131,7 +133,7 @@ fun TryoutsScreen(
 
             state.actionError?.let { message ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(message, color = Color(0xFFFF5252), fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text(message, color = MaterialTheme.colorScheme.error, fontSize = 13.sp, modifier = Modifier.weight(1f))
                     TextButton(onClick = viewModel::clearActionError) { Text("Cerrar") }
                 }
             }
@@ -146,7 +148,7 @@ fun TryoutsScreen(
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
                 state.loadError != null && selectedTab != TAB_MINE -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(state.loadError ?: "", color = Color(0xFFFF5252))
+                    Text(state.loadError ?: "", color = MaterialTheme.colorScheme.error)
                 }
                 notices.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
@@ -170,8 +172,8 @@ fun TryoutsScreen(
                             notice = notice,
                             noticeState = noticeState,
                             showStatus = selectedTab == TAB_MINE,
-                            canCancel = noticeState == TryoutState.VIGENTE &&
-                                (notice.authorId == state.currentUserId || state.isAdmin),
+                            // Autor, admin o moderador (state.isAdmin incluye moderators/{uid}).
+                            canCancel = notice.canCancel(state.currentUserId, state.isAdmin, state.nowMillis),
                             isCancelling = state.cancellingId == notice.id,
                             onCancel = { confirmCancel = notice }
                         )
@@ -264,12 +266,15 @@ private fun TryoutCard(
                     val (label, color) = when (noticeState) {
                         TryoutState.VIGENTE -> "VIGENTE" to MaterialTheme.colorScheme.primary
                         TryoutState.VENCIDO -> "VENCIDO" to MaterialTheme.colorScheme.onSurfaceVariant
-                        TryoutState.CANCELADO -> "CANCELADO" to Color(0xFFFF5252)
+                        TryoutState.CANCELADO -> (if (notice.cancelledByModeration()) "CANCELADO POR MODERACIÓN" else "CANCELADO") to
+                            MaterialTheme.colorScheme.error
                     }
                     Text(label, color = color, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
             Text("Por ${notice.authorName}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            if (notice.cancelledByModeration()) Text("Cancelado por moderación", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+            if (notice.pending) Text("Pendiente de sincronizar", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
             Text(notice.description, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
             Spacer(modifier = Modifier.height(2.dp))
             InfoLine("Categoría", notice.category ?: "Todas las categorías")
@@ -279,7 +284,7 @@ private fun TryoutCard(
             InfoLine("Fecha límite", notice.deadlineMillis?.formattedDate() ?: "Sin fecha límite")
             if (canCancel) {
                 TextButton(onClick = onCancel, enabled = !isCancelling) {
-                    Text(if (isCancelling) "Cancelando…" else "Cancelar aviso", color = Color(0xFFFF5252))
+                    Text(if (isCancelling) "Cancelando…" else "Cancelar aviso", color = MaterialTheme.colorScheme.error)
                 }
             }
         }

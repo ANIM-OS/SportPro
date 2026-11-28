@@ -16,5 +16,9 @@ data class TryoutNotice(
     val location: String? = null,
     val deadlineMillis: Long? = null,
     val status: String = TRYOUT_ACTIVE,
-    val createdAtMillis: Long? = null
+    val createdAtMillis: Long? = null,
+    /** US-20: quién lo canceló (el autor, el admin o un moderador). */
+    val cancelledBy: String? = null,
+    /** Creado o cancelado en este celular y aún no confirmado por el servidor. */
+    val pending: Boolean = false
 )

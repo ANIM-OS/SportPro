@@ -91,7 +91,7 @@ Para designar un administrador, crea en Firestore el documento `admins/{uid}` de
 
 Cualquier usuario puede elegir el rol `ENTRENADOR`, pero crear equipos, invitar jugadores, generar códigos de unión, editar alineaciones y publicar como entrenador exige el documento `coachApprovals/{uid}` con el campo booleano `approved` en `true`, creado desde la consola de Firebase. Las reglas de Firestore aplican esta condición; los eventos en vivo se guardan solo en la app, por lo que ahí la aprobación se comprueba únicamente en la interfaz. Para retirar la aprobación, cambia `approved` a `false` o elimina el documento.
 
-Los avisos de pruebas y convocatorias (US-20) están en la pestaña Convocatorias de Comunidad y se guardan en la colección `tryoutNotices`. Solo un entrenador aprobado puede publicarlos; título y descripción son obligatorios. Un aviso vence al terminar el día de su fecha límite y, sin fecha límite, sigue vigente hasta que se cancela. Vigente o vencido se calcula en la app con la hora del dispositivo, porque el plan Spark no permite Cloud Functions. Solo el autor o un administrador pueden cancelar un aviso; los avisos no se eliminan. Los propietarios de equipos sin aprobación conservan la edición y eliminación de sus equipos y la gestión de sus miembros.
+Los avisos de pruebas y convocatorias (US-20, criterios en [`docs/criterios-us20.md`](docs/criterios-us20.md)) están en la pestaña Convocatorias de Comunidad y se guardan en la colección `tryoutNotices`. Solo un entrenador aprobado puede publicarlos; título y descripción son obligatorios y el autor aparece con el nombre de su perfil o "Usuario SportPro". La fecha de prueba no puede ser anterior a hoy y la fecha límite debe ser el día de la prueba o antes. Un aviso vence a las 23:59:59 (hora de Lima) de su fecha límite y, sin fecha límite, sigue vigente hasta que se cancela; las fechas se guardan y muestran en America/Lima. Vigente o vencido se calcula en la app comparando con la hora actual, porque el plan Spark no permite Cloud Functions. Pueden cancelar el autor, un administrador o un moderador (queda `cancelledBy`; si no es el autor se muestra "Cancelado por moderación"). Cancelar no se puede deshacer; los avisos no se editan ni se eliminan. Los vigentes los lee cualquier usuario con sesión; los cancelados, solo su autor, el admin y los moderadores. Sin conexión se ve "Pendiente de sincronizar". Los propietarios de equipos sin aprobación conservan la edición y eliminación de sus equipos y la gestión de sus miembros.
 
 ## Licencia
 
@@ -281,7 +281,8 @@ la pestaña Partidos), `client-match-events-check.mjs` (eventos e historial, US-
 Estadísticas, US-15/16). Los anuncios (US-17) se prueban con
 `tests/announcements/client-announcements-check.mjs` y las publicaciones de la comunidad
 (US-18) con `tests/community/client-community-check.mjs`; los comentarios y reacciones (US-19)
-con `tests/community/client-comments-check.mjs`.
+con `tests/community/client-comments-check.mjs`, y los avisos de pruebas (US-20) con
+`tests/tryouts/client-tryouts-check.mjs`.
 Solo utiliza `demo-sportpro` en localhost; sus cuentas y datos ficticios no funcionan
 en SportPro ni se migran al Firebase compartido. La interfaz de los datos de prueba
 está en http://127.0.0.1:4000/firestore. No ejecutar `firebase deploy` para estas pruebas.

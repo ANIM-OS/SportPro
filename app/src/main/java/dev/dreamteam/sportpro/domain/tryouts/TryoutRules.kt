@@ -15,6 +15,20 @@ const val TRYOUT_LOCATION_MAX = 120
 
 enum class TryoutState { VIGENTE, VENCIDO, CANCELADO }
 
+/** US-20: las fechas de los avisos se guardan y se muestran en hora de Lima, sin depender del celular. */
+val TRYOUT_ZONE: ZoneId = ZoneId.of("America/Lima")
+
+/** Hoy en Lima. */
+fun tryoutToday(nowMillis: Long = System.currentTimeMillis()): LocalDate = epochMillisToDate(nowMillis, TRYOUT_ZONE)
+
+/** Cancelado por alguien que no es el autor (admin o moderador). */
+fun TryoutNotice.cancelledByModeration(): Boolean =
+    status == TRYOUT_CANCELLED && !cancelledBy.isNullOrBlank() && cancelledBy != authorId
+
+/** Puede cancelar: el autor o el admin/moderador, solo si sigue vigente. */
+fun TryoutNotice.canCancel(viewerId: String?, isModerator: Boolean, nowMillis: Long): Boolean =
+    state(nowMillis) == TryoutState.VIGENTE && !viewerId.isNullOrBlank() && (authorId == viewerId || isModerator)
+
 /**
  * A notice expires once its deadline passes; without a deadline it stays current until cancelled.
  * Computed on the device because Spark has no Cloud Functions to update the status.
@@ -36,7 +50,7 @@ data class TryoutFilter(
     val isActive: Boolean
         get() = category != null || position != null || fromDate != null || toDate != null || location.isNotBlank()
 
-    fun matches(notice: TryoutNotice, zone: ZoneId = ZoneId.systemDefault()): Boolean {
+    fun matches(notice: TryoutNotice, zone: ZoneId = TRYOUT_ZONE): Boolean {
         val tryoutDate = notice.tryoutDateMillis?.let { epochMillisToDate(it, zone) }
         return (category == null || notice.category == null || notice.category == category) &&
             (position == null || notice.position == null || notice.position == position) &&
@@ -76,11 +90,11 @@ fun validateTryout(
         else -> null
     },
     location = if (location.trim().length > TRYOUT_LOCATION_MAX) "La ubicación admite hasta $TRYOUT_LOCATION_MAX caracteres" else null,
-    tryoutDate = if (tryoutDate != null && tryoutDate.isBefore(today)) "La fecha de la prueba no puede ser anterior a hoy" else null,
+    tryoutDate = if (tryoutDate != null && tryoutDate.isBefore(today)) "La fecha de la prueba no puede ser anterior a hoy (hora de Lima)" else null,
     deadline = when {
         deadline == null -> null
-        deadline.isBefore(today) -> "La fecha límite no puede ser anterior a hoy"
-        tryoutDate != null && deadline.isAfter(tryoutDate) -> "La fecha límite debe ser igual o anterior a la fecha de la prueba"
+        deadline.isBefore(today) -> "La fecha límite no puede ser anterior a hoy (hora de Lima)"
+        tryoutDate != null && deadline.isAfter(tryoutDate) -> "La fecha límite debe ser el día de la prueba o antes"
         else -> null
     }
 )
@@ -88,14 +102,14 @@ fun validateTryout(
 fun String.normalizedForSearch(): String =
     Normalizer.normalize(trim().lowercase(), Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
 
-fun LocalDate.startOfDayMillis(zone: ZoneId = ZoneId.systemDefault()): Long =
+fun LocalDate.startOfDayMillis(zone: ZoneId = TRYOUT_ZONE): Long =
     atStartOfDay(zone).toInstant().toEpochMilli()
 
-/** The deadline is a day: the notice expires when that day ends in the device's time zone. */
-fun LocalDate.endOfDayMillis(zone: ZoneId = ZoneId.systemDefault()): Long =
-    plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1
+/** US-20: la fecha límite vence a las 23:59:59 de ese día en Lima (zona fija, no la del celular). */
+fun LocalDate.endOfDayMillis(zone: ZoneId = TRYOUT_ZONE): Long =
+    atTime(23, 59, 59).atZone(zone).toInstant().toEpochMilli()
 
-fun epochMillisToDate(millis: Long, zone: ZoneId = ZoneId.systemDefault()): LocalDate =
+fun epochMillisToDate(millis: Long, zone: ZoneId = TRYOUT_ZONE): LocalDate =
     Instant.ofEpochMilli(millis).atZone(zone).toLocalDate()
 
 // Material3's DatePicker works with UTC midnight.

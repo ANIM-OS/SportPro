@@ -7,6 +7,8 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.MetadataChanges
+import dev.dreamteam.sportpro.data.model.CommunityRules
 import dev.dreamteam.sportpro.data.model.TRYOUT_ACTIVE
 import dev.dreamteam.sportpro.data.model.TRYOUT_CANCELLED
 import dev.dreamteam.sportpro.data.model.TryoutNotice
@@ -22,14 +24,14 @@ class TryoutRepository {
     val currentUserId: String? get() = auth.currentUser?.uid
 
     fun observeActive(onUpdate: (List<TryoutNotice>) -> Unit, onError: (String) -> Unit): ListenerRegistration =
-        notices.whereEqualTo("status", TRYOUT_ACTIVE).addSnapshotListener { snapshot, error ->
+        notices.whereEqualTo("status", TRYOUT_ACTIVE).addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
             if (error != null) onError(readError(error, "No se pudieron cargar las convocatorias"))
             else onUpdate(snapshot?.documents.orEmpty().map(::toNotice))
         }
 
     fun observeMine(onUpdate: (List<TryoutNotice>) -> Unit, onError: (String) -> Unit): ListenerRegistration {
         val uid = currentUserId ?: return ListenerRegistration { }
-        return notices.whereEqualTo("authorId", uid).addSnapshotListener { snapshot, error ->
+        return notices.whereEqualTo("authorId", uid).addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
             if (error != null) onError(readError(error, "No se pudieron cargar tus avisos"))
             else onUpdate(snapshot?.documents.orEmpty().map(::toNotice))
         }
@@ -50,12 +52,31 @@ class TryoutRepository {
             onError("Debes iniciar sesión para publicar")
             return
         }
-        val authorName = user.displayName?.takeIf { it.isNotBlank() }
-            ?: user.email?.substringBefore("@")?.replace(".", " ")?.replaceFirstChar { it.uppercase() }
-            ?: "Entrenador SportPro"
+        // US-20: nombre del perfil (caché si no hay conexión) o "Usuario SportPro"; nunca displayName ni correo.
+        firestore.collection("users").document(user.uid).get()
+            .addOnSuccessListener { profile ->
+                val authorName = CommunityRules.authorName(profile.getString("firstName"), profile.getString("lastName"))
+                write(user.uid, authorName, title, description, category, position, tryoutDateMillis, location, deadlineMillis, onSuccess, onError)
+            }
+            .addOnFailureListener { onError("Conéctate una vez para cargar tu perfil y poder publicar.") }
+    }
+
+    private fun write(
+        uid: String,
+        authorName: String,
+        title: String,
+        description: String,
+        category: String?,
+        position: String?,
+        tryoutDateMillis: Long?,
+        location: String?,
+        deadlineMillis: Long?,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
         val data = hashMapOf<String, Any>(
-            "authorId" to user.uid,
-            "authorName" to authorName.take(100),
+            "authorId" to uid,
+            "authorName" to authorName,
             "title" to title.trim(),
             "description" to description.trim(),
             "status" to TRYOUT_ACTIVE,
@@ -67,26 +88,31 @@ class TryoutRepository {
         location?.trim()?.takeIf { it.isNotEmpty() }?.let { data["location"] = it }
         deadlineMillis?.let { data["deadline"] = Timestamp(Date(it)) }
 
-        notices.add(data)
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { onError(writeError(it, "No se pudo publicar el aviso")) }
+        // Sin conexión no se bloquea: queda en el celular ("Pendiente de sincronizar") y se envía al reconectar.
+        notices.add(data).addOnFailureListener { onError(writeError(it, "No se pudo publicar el aviso")) }
+        onSuccess()
     }
 
+    /** Cancela (irreversible) guardando quién lo hizo: el autor, el admin o un moderador. */
     fun cancel(noticeId: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        val uid = currentUserId ?: run { onError("Debes iniciar sesión"); return }
         notices.document(noticeId)
-            .update(mapOf("status" to TRYOUT_CANCELLED, "cancelledAt" to FieldValue.serverTimestamp()))
-            .addOnSuccessListener { onSuccess() }
+            .update(mapOf("status" to TRYOUT_CANCELLED, "cancelledAt" to FieldValue.serverTimestamp(), "cancelledBy" to uid))
             .addOnFailureListener { onError(writeError(it, "No se pudo cancelar el aviso")) }
+        onSuccess()
     }
 
+    /** Admin (admins/{uid}) o moderador (moderators/{uid}): pueden cancelar avisos ajenos. */
     fun checkAdmin(onResult: (Boolean) -> Unit) {
         val uid = currentUserId ?: run {
             onResult(false)
             return
         }
-        firestore.collection("admins").document(uid).get()
-            .addOnSuccessListener { onResult(it.exists()) }
-            .addOnFailureListener { onResult(false) }
+        val admin = firestore.collection("admins").document(uid).get()
+        val moderator = firestore.collection("moderators").document(uid).get()
+        com.google.android.gms.tasks.Tasks.whenAllComplete(admin, moderator).addOnCompleteListener {
+            onResult((admin.isSuccessful && admin.result.exists()) || (moderator.isSuccessful && moderator.result.exists()))
+        }
     }
 
     private fun toNotice(document: DocumentSnapshot) = TryoutNotice(
@@ -101,7 +127,9 @@ class TryoutRepository {
         location = document.getString("location"),
         deadlineMillis = document.getTimestamp("deadline")?.toDate()?.time,
         status = document.getString("status") ?: TRYOUT_ACTIVE,
-        createdAtMillis = document.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+        createdAtMillis = document.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time,
+        cancelledBy = document.getString("cancelledBy"),
+        pending = document.metadata.hasPendingWrites()
     )
 
     private fun readError(error: FirebaseFirestoreException, fallback: String): String =

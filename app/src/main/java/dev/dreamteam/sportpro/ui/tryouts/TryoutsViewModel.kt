@@ -8,6 +8,7 @@ import dev.dreamteam.sportpro.data.repository.TryoutRepository
 import dev.dreamteam.sportpro.domain.tryouts.TryoutFilter
 import dev.dreamteam.sportpro.domain.tryouts.endOfDayMillis
 import dev.dreamteam.sportpro.domain.tryouts.startOfDayMillis
+import dev.dreamteam.sportpro.domain.tryouts.tryoutToday
 import dev.dreamteam.sportpro.domain.tryouts.validateTryout
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -81,7 +82,7 @@ class TryoutsViewModel : ViewModel() {
     fun publish(draft: TryoutDraft, onSuccess: () -> Unit) {
         if (_uiState.value.isPublishing) return
         val errors = validateTryout(
-            draft.title, draft.description, draft.location, draft.tryoutDate, draft.deadline, LocalDate.now()
+            draft.title, draft.description, draft.location, draft.tryoutDate, draft.deadline, tryoutToday()
         )
         if (errors.hasErrors) {
             _uiState.update { it.copy(publishError = "Revisa los campos marcados") }
