@@ -164,6 +164,57 @@ object MatchEvents {
         }
     }
 
+    /**
+     * Datos que el tipo exige en el catálogo (US-12) y faltan en el formulario, con su nombre visible.
+     * Mismo criterio que las reglas: requiredCore (minuto, equipo, jugador, observaciones) y requiredExtra.
+     * El jugador solo cuenta con "Nuestro equipo" (las reglas exigen team == OWN para playerId).
+     */
+    fun missingRequired(type: EventType, minute: String, team: String, playerId: String, notes: String,
+        extras: Map<String, String>): List<String> {
+        val core = type.requiredCore.filter { field ->
+            when (field) {
+                CoreFields.MINUTE -> minute.isBlank()
+                CoreFields.TEAM -> team.isBlank()
+                CoreFields.PLAYER -> playerId.isBlank() || team != EventTeams.OWN
+                CoreFields.NOTES -> notes.isBlank()
+                else -> false
+            }
+        }.map(CoreFields::label)
+        val extra = type.extraFields.filter { it.required && extras[it.key].isNullOrBlank() }.map { it.label }
+        return core + extra
+    }
+
+    /**
+     * Validación completa antes de guardar: la básica ([validate]) y, si se conoce el tipo, sus datos
+     * obligatorios. Así el error se ve al instante y no al sincronizar (sin conexión el evento
+     * aparecería y luego desaparecería al rechazarlo el servidor).
+     */
+    fun validateEvent(type: EventType?, typeId: String, minute: String, team: String, playerId: String, notes: String,
+        extras: Map<String, String>): String? {
+        validate(typeId, minute, extras)?.let { return it }
+        val missing = type?.let { missingRequired(it, minute, team, playerId, notes, extras) }.orEmpty()
+        return if (missing.isEmpty()) null
+        else "Faltan datos obligatorios de «${type!!.name}»: ${missing.joinToString(", ")}."
+    }
+
+    /** Si el tipo exige Jugador, el equipo también es obligatorio (el jugador solo existe en el propio). */
+    fun isTeamRequired(type: EventType?): Boolean =
+        type != null && (CoreFields.TEAM in type.requiredCore || CoreFields.PLAYER in type.requiredCore)
+
+    /** Equipo al elegir un tipo: si exige Jugador se pone el propio para activar el selector de jugador. */
+    fun teamForType(type: EventType?, currentTeam: String): String =
+        if (type != null && CoreFields.PLAYER in type.requiredCore) EventTeams.OWN else currentTeam
+
+    const val TEAM_COACH_LABEL = "Entrenadora del equipo"
+
+    /**
+     * Cómo se muestra quién registró, corrigió o anuló: si fue la dueña del partido y quien mira es otra
+     * persona, "Entrenadora del equipo" (no se lee users/{uid} ni se expone su nombre o correo). null =
+     * mostrar el nombre como hasta ahora (la propia dueña ve el suyo).
+     */
+    fun actorLabel(actorId: String?, ownerId: String, viewerId: String?): String? =
+        if (!actorId.isNullOrBlank() && ownerId.isNotBlank() && actorId == ownerId && viewerId != ownerId) TEAM_COACH_LABEL else null
+
     /** Un cambio no puede tener al mismo jugador en Sale y Entra (también lo exigen las reglas). */
     fun sameSaleEntra(extras: Map<String, String>): Boolean {
         val out = extras["sale"].orEmpty()

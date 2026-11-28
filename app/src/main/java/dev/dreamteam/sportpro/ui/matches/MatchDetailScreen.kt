@@ -198,7 +198,7 @@ private fun rememberEventLabels(ctx: MatchEventContext, entry: MatchEntry, event
     val guardian = entry.viewer as? MatchViewer.Guardian
     val (names, unknown) = MatchEvents.visibleNames(entry.role, events, players.names,
         guardian?.row?.playerId.orEmpty(), guardian?.playerName.orEmpty())
-    return EventLabels(ctx.ownName, ctx.opponent, names, extraLabels, unknown)
+    return EventLabels(ctx.ownName, ctx.opponent, names, extraLabels, unknown, ownerId = entry.match.ownerId)
 }
 
 private enum class GuardianAccess { LOADING, READY, FAILED }

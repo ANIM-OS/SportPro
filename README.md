@@ -131,8 +131,8 @@ reglas hechos por otros integrantes.
 Antes de cambiarlas de nuevo, compara la versión publicada con el repositorio.
 La pestaña **Partidos** y
 **Equipos → Convocatorias por partido** leen los mismos documentos `matchFixtures`.
-El marcador y los eventos todavía no tienen persistencia; la app no muestra
-marcadores ni cronologías ficticias como si fueran reales.
+Al tocar un partido en **Partidos** se abre su detalle con las pestañas Info,
+Convocatoria, Alineación y LIVE (marcador y eventos, ver US-12 a US-14).
 
 Los partidos se guardan en `matchFixtures`; cada selección, en `matchCallupPlayers`,
 con identidad estable de partido y jugador. El rival se introduce únicamente al registrar
@@ -149,8 +149,9 @@ Al eliminar un equipo, la app elimina también sus partidos, convocatorias,
 respuestas de disponibilidad y alineaciones por partido.
 Los borradores antiguos del dispositivo no se migran ni se eliminan.
 
-Las reglas de estas historias están incluidas en `firestore.rules`. Los módulos
-de eventos US-12 a US-15 todavía requieren su propia integración de datos.
+Las reglas de estas historias están incluidas en `firestore.rules`. Los eventos
+del partido (US-12 a US-14) se describen más abajo; US-15 y siguientes aún no
+usan esos datos.
 
 
 ## US-11: alineación por partido
@@ -185,6 +186,43 @@ Retirar a un jugador de la convocatoria también retira su asignación en la mis
 transacción. Si cambia su categoría o membresía desde otro módulo, la pantalla avisa
 que su asignación ya no es válida y permite retirarla; no altera ese otro módulo.
 
+## US-12, US-13 y US-14: catálogo y eventos del partido
+
+Los criterios de aceptación y su estado están en
+[`docs/criterios-us12-14.md`](docs/criterios-us12-14.md).
+
+**Catálogo (US-12).** `eventCatalog/{tipo}` es el catálogo general (solo el admin, desde
+**Entrenamientos → Administración → Catálogo global**, con el botón para crear los nueve
+tipos base). `teams/{equipo}/eventTypes/{tipo}` guarda los tipos propios del equipo
+(ID `eq_…`) y los generales que el equipo desactiva; lo gestiona la entrenadora dueña
+aprobada desde **Equipos → Catálogo de eventos**. Cada tipo define qué datos son
+obligatorios (minuto, equipo, jugador, observaciones y datos adicionales). Desactivar un
+tipo no borra nada.
+
+**Eventos (US-13).** Se registran en la pestaña **LIVE** del partido y se guardan en
+`matchFixtures/{partido}/events/{evento}`. Solo la entrenadora dueña aprobada registra,
+con los tipos activos del catálogo de su equipo, desde el inicio del partido hasta 24 h
+después. La app comprueba los datos obligatorios del tipo antes de guardar y las reglas
+vuelven a validarlos, junto con el minuto, el equipo (propio o rival), que el jugador
+esté convocado y que en un cambio salga y entre un jugador distinto. Leen los eventos
+la dueña, los jugadores convocados, el tutor vinculado (con el mismo acceso que la
+alineación) y el admin. Cada evento guarda quién y cuándo lo registró, y una copia del
+nombre del jugador: la dueña y los jugadores ven los nombres, el tutor ve a su jugador y
+"Compañero" para el resto, y el admin ve "Jugador". Quien no es la dueña ve como autor
+"Entrenadora del equipo".
+
+Las escrituras van en `batch` (evento + revisión), así que funcionan sin conexión: el
+evento aparece como "Pendiente de sincronizar" y se envía al reconectar. Si el servidor
+lo rechaza al sincronizar (por ejemplo, porque el tipo se desactivó), desaparece y LIVE
+muestra el motivo. Los eventos que versiones anteriores guardaban solo en el celular se
+descartan una vez, con un aviso.
+
+**Corrección y anulación (US-14).** Desde el detalle del evento, la dueña corrige o anula
+hasta 7 días después del inicio. Cada cambio sube la versión y crea
+`events/{evento}/revisions/{versión}` con el valor anterior, quién y cuándo. Anular marca
+el evento como anulado (nunca se borra) y deja de contar en el marcador. Los eventos y su
+historial solo se borran al eliminar el equipo.
+
 ## Pruebas aisladas de Firebase
 
 Los emuladores se conservan únicamente para las pruebas automatizadas de reglas;
@@ -197,6 +235,9 @@ no son una variante de la aplicación ni se necesitan para abrir SportPro.
 incluido el recorrido QR → membresía → convocatoria → respuesta con reglas reales
 en el emulador local. También cubre autorizaciones, persistencia, fechas límite, alineaciones independientes,
 escrituras simultáneas y conservación de la alineación general.
+Los eventos tienen sus propios scripts con el SDK cliente en `tests/events/`:
+`client-catalog-check.mjs` (catálogo, US-12), `client-matches-check.mjs` (lecturas de
+la pestaña Partidos) y `client-match-events-check.mjs` (eventos e historial, US-13/14).
 Solo utiliza `demo-sportpro` en localhost; sus cuentas y datos ficticios no funcionan
 en SportPro ni se migran al Firebase compartido. La interfaz de los datos de prueba
 está en http://127.0.0.1:4000/firestore. No ejecutar `firebase deploy` para estas pruebas.

@@ -86,6 +86,12 @@ private fun ActorName14(
         .getInstance()
         .currentUser
 
+    // Otros usuarios no pueden leer users/{uid}: si fue la dueña, se muestra "Entrenadora del equipo".
+    MatchEvents.actorLabel(actorId, LocalEventLabels.current.ownerId, signedIn?.uid)?.let { fixed ->
+        Text(text = fixed, fontSize = textSize.sp, color = Color.White)
+        return
+    }
+
     var display by remember(actorId) {
         mutableStateOf("Buscando nombre...")
     }
@@ -396,6 +402,8 @@ fun EventEditScreen(
         ?.let { EventType(it.typeId, it.typeName, active = false) })
     val players = rememberMatchPlayers(ctx)
     var error by remember { mutableStateOf<String?>(null) }
+    // El mensaje de error se borra en cuanto se cambia cualquier campo (la precarga inicial también lo limpia, sin efecto).
+    ClearOnFormChange(state) { error = null }
 
     Us14Container(title = "CORREGIR EVENTO", onBack = onBack) {
         when {
@@ -413,8 +421,8 @@ fun EventEditScreen(
                 error?.let { Text(text = it, color = MaterialTheme.colorScheme.error) }
                 Button(
                     onClick = {
-                        error = MatchEvents.validate(state.typeId, state.minute, state.extras)
                         val selected = allTypes.firstOrNull { it.id == state.typeId }
+                        error = MatchEvents.validateEvent(selected, state.typeId, state.minute, state.team, state.playerId, state.notes, state.extras)
                         val actor = currentActor14()
                         if (error == null && selected != null) {
                             if (actor == null) error = "Debes iniciar sesión"

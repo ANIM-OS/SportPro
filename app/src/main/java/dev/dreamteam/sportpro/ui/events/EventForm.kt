@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.flow.drop
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -33,7 +34,9 @@ data class EventLabels(
     val opponent: String = "",
     val playerNames: Map<String, String> = emptyMap(),
     val extraLabels: Map<String, String> = emptyMap(),
-    val unknownPlayer: String = "Jugador"
+    val unknownPlayer: String = "Jugador",
+    /** Dueña del partido: quien registra, corrige y anula (ver MatchEvents.actorLabel). */
+    val ownerId: String = ""
 ) {
     fun team(code: String?) = MatchEvents.teamLabel(code, ownName, opponent)
     fun player(id: String?) = if (id.isNullOrBlank()) "Sin especificar" else playerNames[id] ?: unknownPlayer
@@ -43,6 +46,14 @@ data class EventLabels(
 }
 
 val LocalEventLabels = staticCompositionLocalOf { EventLabels() }
+
+/** Llama a [onChange] cada vez que el usuario cambia un campo (no al abrir el formulario). */
+@Composable
+fun ClearOnFormChange(state: EventFormState, onChange: () -> Unit) {
+    LaunchedEffect(state) {
+        snapshotFlow { state.fingerprint() }.drop(1).collect { onChange() }
+    }
+}
 
 /** Convocados vigentes del partido (dueña): nombres de la plantilla y orden titulares → suplentes → resto. */
 data class MatchPlayers(val options: List<PlayerOption> = emptyList(), val names: Map<String, String> = emptyMap(), val loading: Boolean = true)
@@ -74,6 +85,9 @@ class EventFormState(initial: MatchEventRecord? = null) {
     var playerId by mutableStateOf(initial?.playerId.orEmpty())
     var notes by mutableStateOf(initial?.notes.orEmpty())
     val extras = mutableStateMapOf<String, String>().apply { initial?.extraFields?.let { putAll(it) } }
+
+    /** Cambia con cualquier campo del formulario (para borrar el mensaje de error al editar). */
+    fun fingerprint(): List<Any> = listOf(typeId, minute, team, playerId, notes, extras.toMap())
 
     /** Precarga el formulario con un evento que llegó del servidor (corregir). */
     fun load(record: MatchEventRecord) {
@@ -111,14 +125,19 @@ class EventFormState(initial: MatchEventRecord? = null) {
 @Composable
 fun EventFormFields(state: EventFormState, types: List<EventType>, ctx: MatchEventContext, players: MatchPlayers) {
     val type = types.firstOrNull { it.id == state.typeId }
-    fun marked(field: String) = CoreFields.label(field) + if (type?.requiredCore?.contains(field) == true) " *" else " (opcional)"
+    fun marked(field: String) = CoreFields.label(field) +
+        if (type?.requiredCore?.contains(field) == true || (field == CoreFields.TEAM && MatchEvents.isTeamRequired(type))) " *" else " (opcional)"
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Tipo de evento *", fontWeight = FontWeight.Bold)
         if (types.isEmpty()) Text("No hay tipos de evento activos en el catálogo de este equipo.", color = MaterialTheme.colorScheme.error)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             types.forEach { option ->
                 FilterChip(selected = state.typeId == option.id, label = { Text(option.name) }, onClick = {
-                    if (state.typeId != option.id) { state.typeId = option.id; state.extras.clear() }
+                    if (state.typeId != option.id) {
+                        state.typeId = option.id; state.extras.clear()
+                        // Si el tipo exige Jugador se elige el equipo propio y el selector de jugador se activa solo.
+                        state.team = MatchEvents.teamForType(option, state.team)
+                    }
                 })
             }
         }
