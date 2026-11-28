@@ -17,6 +17,7 @@ import com.google.firebase.Timestamp
 import com.google.firebase.storage.FirebaseStorage
 import com.google.firebase.storage.StorageException
 import com.google.android.gms.tasks.Tasks
+import dev.dreamteam.sportpro.ui.callups.MatchCleanup
 import dev.dreamteam.sportpro.data.model.Team
 import dev.dreamteam.sportpro.data.model.TeamInvite
 import dev.dreamteam.sportpro.data.model.TeamJoinCode
@@ -694,82 +695,9 @@ class TeamsViewModel : ViewModel() {
         }, failure)
     }
 
-    private fun deleteMatchData(teamId: String, done: () -> Unit, failed: (Exception) -> Unit) {
-        firestore.collection("matchFixtures").whereEqualTo("teamId", teamId).get(Source.SERVER)
-            .addOnSuccessListener { snapshot ->
-                val matches = snapshot.documents
-                fun next(index: Int) {
-                    if (index == matches.size) done()
-                    else deleteMatchDataForFixture(matches[index].reference, { next(index + 1) }, failed)
-                }
-                next(0)
-            }.addOnFailureListener(failed)
-    }
-
-    private fun deleteMatchDataForFixture(
-        fixture: com.google.firebase.firestore.DocumentReference,
-        done: () -> Unit,
-        failed: (Exception) -> Unit
-    ) {
-        val lineup = firestore.collection("matchLineups").document(fixture.id)
-        fun deleteSelections() {
-            val ownerId = auth.currentUser?.uid ?: return failed(IllegalStateException("La sesión terminó"))
-            firestore.collection("matchCallupPlayers")
-                .whereEqualTo("ownerId", ownerId).whereEqualTo("matchId", fixture.id).limit(100)
-                .get(Source.SERVER).addOnSuccessListener { snapshot ->
-                    if (snapshot.isEmpty) {
-                        fixture.delete().addOnSuccessListener { done() }.addOnFailureListener(failed)
-                    } else {
-                        val responses = snapshot.documents.map { selection ->
-                            firestore.collection("matchAvailability").document(selection.id).get(Source.SERVER)
-                        }
-                        Tasks.whenAllSuccess<DocumentSnapshot>(responses).addOnSuccessListener { responseDocs ->
-                            val batch = firestore.batch()
-                            responseDocs.filter { it.exists() }.forEach { batch.delete(it.reference) }
-                            snapshot.documents.forEach { batch.delete(it.reference) }
-                            batch.commit().addOnSuccessListener { deleteSelections() }.addOnFailureListener(failed)
-                        }.addOnFailureListener(failed)
-                    }
-                }.addOnFailureListener(failed)
-        }
-        fun deleteLineup() {
-            lineup.collection("players").limit(5).get(Source.SERVER).addOnSuccessListener { snapshot ->
-                if (!snapshot.isEmpty) {
-                    val batch = firestore.batch()
-                    snapshot.documents.forEach { player ->
-                        if (player.getString("kind") == "STARTER") {
-                            player.getString("position")?.let { batch.delete(lineup.collection("slots").document(it)) }
-                        }
-                        batch.delete(player.reference)
-                    }
-                    batch.commit().addOnSuccessListener { deleteLineup() }.addOnFailureListener(failed)
-                } else {
-                    deleteRelatedLineupSlots(lineup, {
-                        lineup.get(Source.SERVER).addOnSuccessListener { parent ->
-                            if (parent.exists()) lineup.delete().addOnSuccessListener { deleteSelections() }.addOnFailureListener(failed)
-                            else deleteSelections()
-                        }.addOnFailureListener(failed)
-                    }, failed)
-                }
-            }.addOnFailureListener(failed)
-        }
-        deleteLineup()
-    }
-
-    private fun deleteRelatedLineupSlots(
-        lineup: com.google.firebase.firestore.DocumentReference,
-        done: () -> Unit,
-        failed: (Exception) -> Unit
-    ) {
-        lineup.collection("slots").limit(10).get(Source.SERVER).addOnSuccessListener { snapshot ->
-            if (snapshot.isEmpty) done()
-            else {
-                val batch = firestore.batch()
-                snapshot.documents.forEach { batch.delete(it.reference) }
-                batch.commit().addOnSuccessListener { deleteRelatedLineupSlots(lineup, done, failed) }.addOnFailureListener(failed)
-            }
-        }.addOnFailureListener(failed)
-    }
+    // US-09: la cascada de partidos vive en MatchCleanup (también la usa "Cancelar partido").
+    private fun deleteMatchData(teamId: String, done: () -> Unit, failed: (Exception) -> Unit) =
+        MatchCleanup(firestore, auth).deleteTeamMatches(teamId, done, failed)
 
     private fun deleteRelated(collection: String, teamId: String, done: () -> Unit, failed: (Exception) -> Unit) {
         firestore.collection(collection).whereEqualTo("teamId", teamId).limit(100).get(Source.SERVER)

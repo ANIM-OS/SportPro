@@ -170,14 +170,28 @@ private fun GuardianPlayerCallups(link: GuardianLink, repository: CallupReposito
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
     if (!loading && rows.isEmpty() && error == null) Text("Sin convocatorias")
-    rows.forEach { row -> key(row.id) {
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (row.selected) "Convocado" else "Convocatoria retirada")
-                row.encounter?.let { Text("vs ${it.opponent}\n${it.category}\n${dateLabel(it.kickoff.toDate().time)}") }
-                    ?: Text("El entrenador debe actualizar los datos de esta convocatoria anterior.")
-                AvailabilityActions(row, row.encounter)
-            }
+    rows.forEach { row -> key(row.id) { GuardianCallupCard(row, repository) } }
+}
+
+@Composable
+private fun GuardianCallupCard(row: PlayerCallup, repository: CallupRepository) {
+    // El tutor no puede leer el partido; solo se escucha para saber si ya no existe (cancelado).
+    var cancelled by remember(row.matchId) { mutableStateOf(false) }
+    DisposableEffect(row.matchId) {
+        val listener = repository.match(row.matchId, { cancelled = false }, { }, { cancelled = true })
+        onDispose { listener.remove() }
+    }
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) { value = System.currentTimeMillis(); delay(30_000) }
+    }
+    val state = callupCardState(row.selected, if (cancelled) false else null, row.encounter?.kickoff?.toDate()?.time, now)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(state.label, style = MaterialTheme.typography.titleSmall)
+            row.encounter?.let { Text(encounterLabel(it)) }
+                ?: Text("El entrenador debe actualizar los datos de esta convocatoria anterior.")
+            if (state == CallupCardState.CANCELADO) Text("La entrenadora canceló este partido.")
+            else AvailabilityActions(row, row.encounter)
         }
-    } }
+    }
 }

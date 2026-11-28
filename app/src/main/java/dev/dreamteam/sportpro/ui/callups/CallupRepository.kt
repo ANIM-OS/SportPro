@@ -7,12 +7,31 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.*
 
 /** Shared encounter identity for Partidos, convocatorias, disponibilidad and lineups. */
-data class CallupMatch(val id: String, val teamId: String, val category: String, val opponent: String, val kickoff: Timestamp, val responseDeadline: Timestamp = kickoff, val ownerId: String = "")
+data class CallupMatch(val id: String, val teamId: String, val category: String, val opponent: String, val kickoff: Timestamp, val responseDeadline: Timestamp = kickoff, val ownerId: String = "", val teamName: String = "")
 data class PlayerCallup(val id: String, val matchId: String, val teamId: String, val playerId: String, val selected: Boolean, val encounter: CallupMatch? = null, val ownerId: String = "")
 
 internal const val MAX_CALLUP_WRITE_COST = 15
 internal fun callupWriteCost(selected: Set<String>, saved: Set<String>): Int =
     (selected - saved).size + 3 * (saved - selected).size
+/** Estado de una convocatoria tal como la ven el jugador y el tutor. */
+enum class CallupCardState(val label: String) {
+    CONVOCADO("Convocado"), RETIRADA("Convocatoria retirada"), FINALIZADO("Partido finalizado"),
+    CANCELADO("Partido cancelado"), SIN_CONFIRMAR("Convocatoria sin confirmar")
+}
+
+/** [fixtureExists]: true = existe, false = ya no existe (cancelado), null = desconocido o sin acceso. */
+internal fun callupCardState(selected: Boolean, fixtureExists: Boolean?, kickoffMillis: Long?, nowMillis: Long): CallupCardState = when {
+    fixtureExists == false -> CallupCardState.CANCELADO
+    !selected -> CallupCardState.RETIRADA
+    kickoffMillis == null -> CallupCardState.SIN_CONFIRMAR
+    kickoffMillis <= nowMillis -> CallupCardState.FINALIZADO
+    else -> CallupCardState.CONVOCADO
+}
+
+internal fun encounterLabel(match: CallupMatch): String =
+    (if (match.teamName.isBlank()) "" else "Equipo: ${match.teamName}\n") +
+        "vs ${match.opponent}\n${match.category}\n${dateLabel(match.kickoff.toDate().time)} (hora local)"
+
 internal const val CALLUP_WRITE_LIMIT_MESSAGE = "Guarda primero estos cambios para continuar: hasta 15 altas o 5 retiros por guardado."
 
 class CallupRepository {
@@ -26,9 +45,14 @@ class CallupRepository {
             if (failure != null) error("No se pudieron cargar los partidos: ${failure.localizedMessage}")
             else change(snapshot?.documents.orEmpty().mapNotNull(::match).sortedBy { it.kickoff })
         }
-    fun match(id: String, change: (CallupMatch?) -> Unit, error: (String) -> Unit) =
+    /** [missing] se llama cuando el servidor confirma que el partido ya no existe (cancelado). */
+    fun match(id: String, change: (CallupMatch?) -> Unit, error: (String) -> Unit, missing: () -> Unit = {}) =
         fixtures.document(id).addSnapshotListener { snapshot, failure ->
-            if (failure != null) error("No se pudo consultar el encuentro") else change(snapshot?.let(::match))
+            when {
+                failure != null -> error("No se pudo consultar el encuentro")
+                snapshot != null && !snapshot.exists() && !snapshot.metadata.isFromCache -> missing()
+                else -> change(snapshot?.let(::match))
+            }
         }
     fun coachSelections(matchId: String, change: (List<PlayerCallup>) -> Unit, error: (String) -> Unit) =
         selections.whereEqualTo("ownerId", uid).whereEqualTo("matchId", matchId)
@@ -46,7 +70,7 @@ class CallupRepository {
             if (failure != null) error("No se pudieron consultar las convocatorias del jugador")
             else change(snapshot?.documents.orEmpty().mapNotNull(::selection))
         }
-    fun saveMatch(existing: CallupMatch?, teamId: String, category: String, opponent: String, kickoff: Long, deadline: Long = kickoff): Task<Void> {
+    fun saveMatch(existing: CallupMatch?, teamId: String, teamName: String, category: String, opponent: String, kickoff: Long, deadline: Long = kickoff): Task<Void> {
         if (opponent.isBlank() || opponent.trim().length > 100 || kickoff <= System.currentTimeMillis() || deadline <= System.currentTimeMillis() || deadline > kickoff)
             return Tasks.forException(IllegalArgumentException("El cierre debe ser futuro y no posterior al partido"))
         if (existing != null && existing.responseDeadline.toDate().time <= System.currentTimeMillis())
@@ -62,7 +86,7 @@ class CallupRepository {
                 val docs = task.result.documents
                 check(docs.size <= 450) { "Demasiados destinatarios para actualizar el partido" }
                 val batch = db.batch().set(ref, data)
-                val details = mapOf("opponent" to opponent.trim(), "category" to category,
+                val details = mapOf("opponent" to opponent.trim(), "category" to category, "teamName" to teamName,
                     "kickoff" to Timestamp(java.util.Date(kickoff)), "responseDeadline" to Timestamp(java.util.Date(deadline)))
                 docs.forEach { batch.update(it.reference, "encounter", details, "updatedAt", FieldValue.serverTimestamp()) }
                 batch.commit()
@@ -109,6 +133,7 @@ class CallupRepository {
                 }
             }
             val details = mapOf("opponent" to encounter.getString("opponent"), "category" to match.category,
+                "teamName" to team.getString("name").orEmpty(),
                 "kickoff" to encounter.getTimestamp("kickoff"),
                 "responseDeadline" to (encounter.getTimestamp("responseDeadline") ?: encounter.getTimestamp("kickoff")))
             changed.forEach { player ->
@@ -142,7 +167,8 @@ class CallupRepository {
                 val kickoff = fields["kickoff"] as? Timestamp ?: return@let null
                 CallupMatch(doc.getString("matchId").orEmpty(), doc.getString("teamId").orEmpty(),
                     fields["category"] as? String ?: "", fields["opponent"] as? String ?: "", kickoff,
-                    fields["responseDeadline"] as? Timestamp ?: kickoff, doc.getString("ownerId").orEmpty())
+                    fields["responseDeadline"] as? Timestamp ?: kickoff, doc.getString("ownerId").orEmpty(),
+                    fields["teamName"] as? String ?: "")
             }, doc.getString("ownerId").orEmpty())
     }
 }

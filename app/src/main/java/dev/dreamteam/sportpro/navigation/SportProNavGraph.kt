@@ -427,7 +427,8 @@ fun SportProNavGraph(
 
             composable(SportProRoute.Live.route) {
                 LiveMatchScreen(
-                    isCoach = AppRole.COACH in roles,
+                    // US-09: "Mis equipos" solo para la entrenadora aprobada.
+                    isCoach = RoleAccess.can(roles, RoleCapability.CREATE_TEAM, isCoachApproved),
                     isPlayer = AppRole.PLAYER in roles,
                     isGuardian = AppRole.PARENT in roles
                 )
