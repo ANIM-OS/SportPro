@@ -111,7 +111,8 @@ class EventFormState(initial: MatchEventRecord? = null) {
         val record = MatchEventRecord(matchId = ctx.matchId, teamId = ctx.teamId, typeId = type.id, typeName = type.name,
             minute = minute.toIntOrNull(), team = team.ifBlank { null }, playerId = player,
             playerName = player?.let { id -> (names[id] ?: base?.playerName?.takeIf { base.playerId == id })?.take(80) },
-            notes = notes.trim(), extraFields = fields, extraNames = extraNames, authorId = actorId)
+            notes = notes.trim(), extraFields = fields, extraNames = extraNames, authorId = actorId,
+            countsAsGoal = type.id.startsWith(EventCatalogRules.CUSTOM_PREFIX) && type.countsAsGoal)
         return base?.let { record.copy(id = it.id, authorId = it.authorId, createdAtMillis = it.createdAtMillis, version = it.version) } ?: record
     }
 }

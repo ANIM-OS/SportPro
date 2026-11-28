@@ -14,8 +14,8 @@ import dev.dreamteam.sportpro.data.model.MatchEventContext
 import dev.dreamteam.sportpro.data.model.MatchEvents
 import dev.dreamteam.sportpro.data.repository.EventCatalogFirestoreRepository
 import dev.dreamteam.sportpro.data.repository.FirestoreMatchEventStore
+import dev.dreamteam.sportpro.ui.matches.registerClosedMessage
 import dev.dreamteam.sportpro.data.repository.eventWriteErrorMessage
-import dev.dreamteam.sportpro.ui.callups.dateLabel
 import kotlinx.coroutines.delay
 
 /**
@@ -35,7 +35,8 @@ fun RegisterLiveEventScreen(ctx: MatchEventContext, onBack: () -> Unit, onSaved:
         onDispose { listener.remove() }
     }
     val now by produceState(System.currentTimeMillis()) { while (true) { value = System.currentTimeMillis(); delay(1000) } }
-    val open = MatchEvents.canRegister(now, ctx.kickoffMillis)
+    // US-15: también se cierra si la entrenadora finaliza el partido (aunque sea desde otro celular).
+    val open = MatchEvents.canRegister(now, ctx.kickoffMillis, ctx.endedAtMillis)
     val players = rememberMatchPlayers(ctx)
     val state = remember(ctx.matchId) { EventFormState() }
     var message by remember { mutableStateOf<String?>(null) }
@@ -45,10 +46,7 @@ fun RegisterLiveEventScreen(ctx: MatchEventContext, onBack: () -> Unit, onSaved:
         TextButton(onClick = onBack) { Text("← Volver al partido") }
         Text("Registrar evento", style = MaterialTheme.typography.headlineSmall)
         Text("${ctx.ownName} vs ${ctx.opponent} · ${ctx.category}")
-        if (!open) Text(
-            if (now < ctx.kickoffMillis) "Podrás registrar eventos cuando empiece el partido (${dateLabel(ctx.kickoffMillis)})."
-            else "El plazo para registrar eventos terminó (24 h después del inicio).",
-            color = MaterialTheme.colorScheme.error)
+        if (!open) Text(registerClosedMessage(now, ctx), color = MaterialTheme.colorScheme.error)
         EventFormFields(state, types, ctx, players)
         message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Button(modifier = Modifier.fillMaxWidth(), enabled = open && types.isNotEmpty(), onClick = {

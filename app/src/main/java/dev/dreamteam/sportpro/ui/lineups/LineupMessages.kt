@@ -51,7 +51,7 @@ internal fun unavailableConfirmationText(name: String) = "$name respondió No di
 
 /** P4c: el botón "Ver alineación del partido" no se ofrece con convocatoria retirada o partido cancelado. */
 internal fun showLineupButton(state: CallupCardState): Boolean =
-    state == CallupCardState.CONVOCADO || state == CallupCardState.FINALIZADO
+    state == CallupCardState.CONVOCADO || state == CallupCardState.EN_JUEGO || state == CallupCardState.FINALIZADO
 
 /**
  * P6: en solo lectura (jugador) se ocultan los alineados que ya no están en la categoría del partido.

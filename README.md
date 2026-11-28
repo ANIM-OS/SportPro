@@ -150,8 +150,8 @@ respuestas de disponibilidad y alineaciones por partido.
 Los borradores antiguos del dispositivo no se migran ni se eliminan.
 
 Las reglas de estas historias están incluidas en `firestore.rules`. Los eventos
-del partido (US-12 a US-14) se describen más abajo; US-15 y siguientes aún no
-usan esos datos.
+del partido (US-12 a US-14), el marcador y el estado del partido (US-15) y las
+estadísticas (US-16) se describen más abajo.
 
 
 ## US-11: alineación por partido
@@ -223,6 +223,28 @@ hasta 7 días después del inicio. Cada cambio sube la versión y crea
 el evento como anulado (nunca se borra) y deja de contar en el marcador. Los eventos y su
 historial solo se borran al eliminar el equipo.
 
+**Marcador y estado del partido (US-15).** Criterios en
+[`docs/criterios-us15-16.md`](docs/criterios-us15-16.md). El marcador de LIVE se calcula
+con los eventos válidos: "Gol", "Penal" con resultado "Gol" y los tipos propios marcados
+**Cuenta como gol** en el catálogo del equipo (la casilla se copia en cada evento). No hay
+autogol y los goles sin equipo no cuentan (se avisa). El estado es único en Info, tarjetas
+y convocatorias: **No iniciado** antes del inicio, **En juego** desde el inicio, y
+**Finalizado** cuando la entrenadora dueña aprobada pulsa **Finalizar partido** (pide
+confirmación, guarda `endedAt`/`endedBy` y no se puede deshacer) o, si no lo pulsa, 24 h
+después del inicio. Tras finalizar no se registran eventos nuevos; corregir y anular sigue
+hasta 7 días. El estado se actualiza cada minuto con la hora del celular (las reglas usan
+la del servidor). La tutora no lee el partido, así que para ella finaliza a las 24 h.
+
+**Estadísticas (US-16).** La pestaña Estadísticas calcula todo con los eventos válidos
+(sin datos de demostración ni resúmenes guardados): por equipo (PJ, G, E, P, GF, GC, DG
+con partidos finalizados), por jugador (convocado, titular, suplente, goles, tarjetas,
+entradas y salidas) y por partido (totales nuestro/rival). Privacidad (US-22): la dueña ve
+todo; el jugador, sus cifras y los totales del equipo de los partidos donde fue convocado;
+la tutora, solo las de su jugador vinculado; el admin, solo cifras sin nombres. El
+histórico se lee una vez (`get`) y el partido en juego o abierto se escucha en tiempo
+real; "Actualizar" vuelve a leer. No se usa `collectionGroup('events')` ni se amplía quién
+lee los eventos: la privacidad de las estadísticas se aplica en la app.
+
 ## Pruebas aisladas de Firebase
 
 Los emuladores se conservan únicamente para las pruebas automatizadas de reglas;
@@ -237,7 +259,9 @@ en el emulador local. También cubre autorizaciones, persistencia, fechas límit
 escrituras simultáneas y conservación de la alineación general.
 Los eventos tienen sus propios scripts con el SDK cliente en `tests/events/`:
 `client-catalog-check.mjs` (catálogo, US-12), `client-matches-check.mjs` (lecturas de
-la pestaña Partidos) y `client-match-events-check.mjs` (eventos e historial, US-13/14).
+la pestaña Partidos), `client-match-events-check.mjs` (eventos e historial, US-13/14) y
+`client-status-stats-check.mjs` (finalizar partido, "Cuenta como gol" y lecturas de
+Estadísticas, US-15/16).
 Solo utiliza `demo-sportpro` en localhost; sus cuentas y datos ficticios no funcionan
 en SportPro ni se migran al Firebase compartido. La interfaz de los datos de prueba
 está en http://127.0.0.1:4000/firestore. No ejecutar `firebase deploy` para estas pruebas.

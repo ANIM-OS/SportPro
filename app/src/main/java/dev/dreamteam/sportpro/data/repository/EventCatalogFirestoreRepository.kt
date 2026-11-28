@@ -69,7 +69,7 @@ class EventCatalogFirestoreRepository(private val db: FirebaseFirestore = Fireba
 
     fun saveCustom(teamId: String, type: EventType): Task<Void> {
         require(type.id.startsWith(EventCatalogRules.CUSTOM_PREFIX)) { "Clave de tipo propio inválida" }
-        return team(teamId).document(type.id).set(fields(type) + mapOf("kind" to "CUSTOM"))
+        return team(teamId).document(type.id).set(customFields(type))
     }
 
     fun setCustomActive(teamId: String, typeId: String, active: Boolean): Task<Void> =
@@ -94,7 +94,7 @@ class EventCatalogFirestoreRepository(private val db: FirebaseFirestore = Fireba
     fun importCustoms(teamId: String, types: List<EventType>): Task<Void> {
         if (types.isEmpty()) return Tasks.forResult(null)
         val batch = db.batch()
-        types.forEach { batch.set(team(teamId).document(it.id), fields(it) + mapOf("kind" to "CUSTOM")) }
+        types.forEach { batch.set(team(teamId).document(it.id), customFields(it)) }
         return batch.commit()
     }
 
@@ -112,6 +112,10 @@ class EventCatalogFirestoreRepository(private val db: FirebaseFirestore = Fireba
         "updatedAt" to FieldValue.serverTimestamp()
     )
 
+    /** Tipo propio: además de los campos comunes, la casilla "Cuenta como gol" (US-15; el global no la tiene). */
+    private fun customFields(type: EventType): Map<String, Any> =
+        fields(type) + mapOf("kind" to "CUSTOM", "countsAsGoal" to type.countsAsGoal)
+
     private fun toType(doc: DocumentSnapshot, custom: Boolean): EventType? {
         val name = doc.getString("name") ?: return null
         @Suppress("UNCHECKED_CAST")
@@ -123,7 +127,7 @@ class EventCatalogFirestoreRepository(private val db: FirebaseFirestore = Fireba
         return EventType(doc.id, name, doc.getString("description").orEmpty(),
             (doc.get("requiredCore") as? List<*>).orEmpty().filterIsInstance<String>(), extras,
             doc.getBoolean("active") ?: true, doc.getBoolean("base") ?: false, (doc.getLong("order") ?: 1000L).toInt(),
-            custom, doc.metadata.hasPendingWrites())
+            custom, doc.metadata.hasPendingWrites(), countsAsGoal = custom && doc.getBoolean("countsAsGoal") == true)
     }
 
     companion object {

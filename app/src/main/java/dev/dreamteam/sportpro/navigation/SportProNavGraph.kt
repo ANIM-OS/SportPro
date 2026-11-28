@@ -378,7 +378,7 @@ fun SportProNavGraph(
             }
 
             composable(SportProRoute.Statistics.route) {
-                StatisticsScreen()
+                StatisticsScreen(roles = roles, isCoachApproved = isCoachApproved)
             }
 
             composable(SportProRoute.Community.route) {

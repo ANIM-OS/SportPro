@@ -5,9 +5,15 @@ import com.google.android.gms.tasks.Tasks
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.*
+import dev.dreamteam.sportpro.data.model.MatchStatus
 
 /** Shared encounter identity for Partidos, convocatorias, disponibilidad and lineups. */
-data class CallupMatch(val id: String, val teamId: String, val category: String, val opponent: String, val kickoff: Timestamp, val responseDeadline: Timestamp = kickoff, val ownerId: String = "", val teamName: String = "")
+data class CallupMatch(val id: String, val teamId: String, val category: String, val opponent: String, val kickoff: Timestamp, val responseDeadline: Timestamp = kickoff, val ownerId: String = "", val teamName: String = "",
+    /** US-15: cuándo y quién lo finalizó (solo en el partido leído de matchFixtures; la copia de la convocatoria no lo tiene). */
+    val endedAt: Timestamp? = null, val endedBy: String? = null) {
+    val endedAtMillis: Long? get() = endedAt?.toDate()?.time
+    fun status(nowMillis: Long): MatchStatus = MatchStatus.of(kickoff.toDate().time, endedAtMillis, nowMillis)
+}
 data class PlayerCallup(val id: String, val matchId: String, val teamId: String, val playerId: String, val selected: Boolean, val encounter: CallupMatch? = null, val ownerId: String = "")
 
 internal const val MAX_CALLUP_WRITE_COST = 15
@@ -15,17 +21,25 @@ internal fun callupWriteCost(selected: Set<String>, saved: Set<String>): Int =
     (selected - saved).size + 3 * (saved - selected).size
 /** Estado de una convocatoria tal como la ven el jugador y el tutor. */
 enum class CallupCardState(val label: String) {
-    CONVOCADO("Convocado"), RETIRADA("Convocatoria retirada"), FINALIZADO("Partido finalizado"),
+    CONVOCADO("Convocado"), RETIRADA("Convocatoria retirada"), EN_JUEGO("Partido en juego"), FINALIZADO("Partido finalizado"),
     CANCELADO("Partido cancelado"), SIN_CONFIRMAR("Convocatoria sin confirmar")
 }
 
-/** [fixtureExists]: true = existe, false = ya no existe (cancelado), null = desconocido o sin acceso. */
-internal fun callupCardState(selected: Boolean, fixtureExists: Boolean?, kickoffMillis: Long?, nowMillis: Long): CallupCardState = when {
-    fixtureExists == false -> CallupCardState.CANCELADO
-    !selected -> CallupCardState.RETIRADA
-    kickoffMillis == null -> CallupCardState.SIN_CONFIRMAR
-    kickoffMillis <= nowMillis -> CallupCardState.FINALIZADO
-    else -> CallupCardState.CONVOCADO
+/**
+ * [fixtureExists]: true = existe, false = ya no existe (cancelado), null = desconocido o sin acceso.
+ * [endedAtMillis]: fin marcado por la entrenadora (el tutor no lo conoce: para él finaliza a las 24 h).
+ * Usa el estado único de US-15 ([MatchStatus]).
+ */
+internal fun callupCardState(selected: Boolean, fixtureExists: Boolean?, kickoffMillis: Long?, nowMillis: Long, endedAtMillis: Long? = null): CallupCardState {
+    if (fixtureExists == false) return CallupCardState.CANCELADO
+    if (!selected) return CallupCardState.RETIRADA
+    return when (MatchStatus.of(fixtureExists, kickoffMillis, endedAtMillis, nowMillis)) {
+        null -> CallupCardState.SIN_CONFIRMAR
+        MatchStatus.NOT_STARTED -> CallupCardState.CONVOCADO
+        MatchStatus.LIVE -> CallupCardState.EN_JUEGO
+        MatchStatus.FINISHED -> CallupCardState.FINALIZADO
+        MatchStatus.CANCELLED -> CallupCardState.CANCELADO
+    }
 }
 
 internal fun encounterLabel(match: CallupMatch): String =
@@ -104,6 +118,14 @@ class CallupRepository {
                 batch.commit()
             }
     }
+    /**
+     * US-15: la dueña aprobada finaliza el partido (no se puede deshacer). Solo endedAt, endedBy y
+     * updatedAt con la hora del servidor; las reglas exigen que esté en juego (inicio a +24 h) y sin endedAt.
+     */
+    fun finishMatch(match: CallupMatch): Task<Void> =
+        fixtures.document(match.id).update(mapOf("endedAt" to FieldValue.serverTimestamp(), "endedBy" to uid,
+            "updatedAt" to FieldValue.serverTimestamp()))
+
     /** Commit the changed recipients and any lineup withdrawals together. */
     fun saveSelections(match: CallupMatch, selected: Set<String>, previous: List<PlayerCallup>): Task<Void> {
         val actor = uid
@@ -176,7 +198,8 @@ class CallupRepository {
             doc.getString("category") ?: return null, doc.getString("opponent") ?: return null,
             doc.getTimestamp("kickoff") ?: return null,
             doc.getTimestamp("responseDeadline") ?: doc.getTimestamp("kickoff") ?: return null,
-            doc.getString("ownerId").orEmpty())
+            doc.getString("ownerId").orEmpty(),
+            endedAt = doc.getTimestamp("endedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE), endedBy = doc.getString("endedBy"))
     }
     private fun selection(doc: DocumentSnapshot): PlayerCallup? {
         return PlayerCallup(doc.id, doc.getString("matchId") ?: return null,

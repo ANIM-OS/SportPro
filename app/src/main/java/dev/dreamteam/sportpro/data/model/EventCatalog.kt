@@ -26,7 +26,9 @@ data class EventType(
     /** true = tipo propio del equipo (teams/{id}/eventTypes, kind CUSTOM). */
     val custom: Boolean = false,
     /** Cambio guardado en el celular y aún no confirmado por el servidor. */
-    val pending: Boolean = false
+    val pending: Boolean = false,
+    /** US-15: solo tipos propios; sus eventos suman al marcador como un gol. */
+    val countsAsGoal: Boolean = false
 ) {
     val requiredExtra: List<String> get() = extraFields.filter { it.required }.map { it.key }
 }

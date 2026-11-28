@@ -34,7 +34,9 @@ data class MatchEventRecord(
     val voidedBy: String? = null,
     val voidedAtMillis: Long? = null,
     /** Escrito en este celular y aún no confirmado por el servidor. */
-    val pending: Boolean = false
+    val pending: Boolean = false,
+    /** US-15: copia de la casilla "Cuenta como gol" del tipo propio al registrar o corregir. */
+    val countsAsGoal: Boolean = false
 )
 
 /**
@@ -62,7 +64,9 @@ data class MatchEventContext(
     val category: String,
     val kickoffMillis: Long,
     val ownName: String,
-    val opponent: String
+    val opponent: String,
+    /** US-15: cuándo la entrenadora finalizó el partido (null = no lo finalizó). */
+    val endedAtMillis: Long? = null
 )
 
 object EventTeams {
@@ -108,9 +112,20 @@ object MatchEvents {
         }
     }
 
-    /** Marcador: goles válidos (no anulados) en su versión actual, por OWN/OPPONENT. */
+    const val PENALTY_TYPE = "penal"
+    const val PENALTY_GOAL = "Gol"
+
+    /**
+     * US-15: un evento válido suma un gol si es "gol", un "penal" con resultado "Gol" o un tipo propio
+     * con "Cuenta como gol" (copiado en el evento). Sin autogol.
+     */
+    fun isGoal(event: MatchEventRecord): Boolean = !event.voided && (event.typeId == GOAL_TYPE ||
+        (event.typeId == PENALTY_TYPE && event.extraFields["resultado"] == PENALTY_GOAL) ||
+        (event.countsAsGoal && event.typeId.startsWith(EventCatalogRules.CUSTOM_PREFIX)))
+
+    /** Marcador: goles válidos (no anulados) en su versión actual, por OWN/OPPONENT. Sin equipo no cuentan. */
     fun score(events: List<MatchEventRecord>): MatchScore {
-        val goals = events.filter { !it.voided && it.typeId == GOAL_TYPE }
+        val goals = events.filter(::isGoal)
         return MatchScore(goals.count { it.team == EventTeams.OWN }, goals.count { it.team == EventTeams.OPPONENT },
             goals.count { it.team != EventTeams.OWN && it.team != EventTeams.OPPONENT })
     }
@@ -221,9 +236,12 @@ object MatchEvents {
         return out.isNotBlank() && out == extras["entra"]
     }
 
-    /** Se registra desde el inicio del partido hasta 24 h después (las reglas usan la hora del servidor). */
-    fun canRegister(nowMillis: Long, kickoffMillis: Long): Boolean =
-        nowMillis >= kickoffMillis && nowMillis < kickoffMillis + REGISTER_HOURS * HOUR
+    /**
+     * Se registra desde el inicio del partido hasta 24 h después (las reglas usan la hora del servidor)
+     * y mientras la entrenadora no lo haya finalizado (US-15).
+     */
+    fun canRegister(nowMillis: Long, kickoffMillis: Long, endedAtMillis: Long? = null): Boolean =
+        endedAtMillis == null && nowMillis >= kickoffMillis && nowMillis < kickoffMillis + REGISTER_HOURS * HOUR
 
     /** Se corrige y anula hasta 7 días después del inicio. */
     fun canCorrect(nowMillis: Long, kickoffMillis: Long): Boolean =

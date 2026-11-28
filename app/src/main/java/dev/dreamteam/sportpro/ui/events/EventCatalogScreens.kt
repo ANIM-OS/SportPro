@@ -196,6 +196,7 @@ private fun EventTypeForm(initial: EventType, existingIds: Set<String>, prefix: 
     var core by remember { mutableStateOf(initial.requiredCore.toSet()) }
     var extras by remember { mutableStateOf(initial.extraFields.map { ExtraDraft(it.key, it.label, it.kind, it.options.joinToString(", "), it.required) }) }
     var active by remember { mutableStateOf(initial.active) }
+    var countsAsGoal by remember { mutableStateOf(initial.countsAsGoal) }
     var error by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         TextButton(onClick = onCancel) { Text("← Cancelar") }
@@ -235,6 +236,16 @@ private fun EventTypeForm(initial: EventType, existingIds: Set<String>, prefix: 
             }
         }
         if (extras.size < EventCatalogRules.MAX_EXTRAS) OutlinedButton(onClick = { extras = extras + ExtraDraft() }) { Text("+ Dato adicional") }
+        // US-15: solo los tipos propios pueden sumar al marcador ("gol" y "penal" con resultado Gol ya cuentan).
+        if (initial.custom) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = countsAsGoal, onCheckedChange = { countsAsGoal = it })
+                Column {
+                    Text("Cuenta como gol")
+                    Text("Cada evento de este tipo suma un gol al equipo indicado en el marcador.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Activo", Modifier.weight(1f))
             Switch(checked = active, onCheckedChange = { active = it })
@@ -250,7 +261,8 @@ private fun EventTypeForm(initial: EventType, existingIds: Set<String>, prefix: 
             if (error == null) {
                 val id = if (isNew) EventCatalogRules.uniqueKey(name, existingIds, prefix) else initial.id
                 onSave(initial.copy(id = id, name = name.trim(), description = description.trim(),
-                    requiredCore = CoreFields.ALL.filter { it in core }, extraFields = built!!, active = active))
+                    requiredCore = CoreFields.ALL.filter { it in core }, extraFields = built!!, active = active,
+                    countsAsGoal = initial.custom && countsAsGoal))
             }
         }) { Text("Guardar tipo") }
     }

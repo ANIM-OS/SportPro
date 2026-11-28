@@ -1,5 +1,7 @@
 package dev.dreamteam.sportpro.ui.live
 
+import dev.dreamteam.sportpro.data.model.MatchStatus
+import dev.dreamteam.sportpro.ui.callups.rememberMinuteClock
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -234,11 +236,9 @@ private fun MatchCard(match: CallupMatch, teamName: String?, cancelled: Boolean 
             Text(if (teamName == null) "vs ${match.opponent}" else "$teamName vs ${match.opponent}",
                 style = MaterialTheme.typography.titleMedium)
             Text("${match.category} · ${dateLabel(match.kickoff.toDate().time)} (hora local)", style = MaterialTheme.typography.bodyMedium)
-            Text(when {
-                cancelled -> "Partido cancelado"
-                match.kickoff.toDate().time > System.currentTimeMillis() -> "Programado"
-                else -> "Comenzó"
-            }, style = MaterialTheme.typography.labelMedium)
+            // US-15: estado único; el reloj avanza cada minuto (la tutora no ve endedAt: para ella finaliza a las 24 h).
+            val now = rememberMinuteClock()
+            Text(if (cancelled) MatchStatus.CANCELLED.label else match.status(now).label, style = MaterialTheme.typography.labelMedium)
         }
     }
 }
